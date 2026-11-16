@@ -8,12 +8,14 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import keyring
 import webview
 from PIL import Image
 
 from .client import BASE, SDOClient, SDOError, safe_url
+from .diagnostic_log import logger, setup_logging, LOG_FILE
 
 
 SERVICE = "SDO-Reborn"
@@ -36,6 +38,7 @@ class Bridge:
         self.site_window = None
         self.site_target = BASE + "/my/"
         self.site_login_pending = False
+        self.cached_data = None
         self._lock = threading.RLock()
         self._tray = None
         self._quitting = False
@@ -50,7 +53,11 @@ class Bridge:
         return {"saved": bool(username and password), "username": username or ""}
 
     def resume(self):
+        logger.info("auth_resume_start")
         try:
+            if self.client.username and self.cached_data is not None:
+                logger.info("auth_resume_cached")
+                return {"ok": True, "username": self.client.username, "data": self.cached_data}
             username = keyring.get_password(SERVICE, "__last_user__")
             password = keyring.get_password(SERVICE, username) if username else None
             if not username or not password:
@@ -58,30 +65,43 @@ class Bridge:
             with self._lock:
                 self.client.login(username, password)
                 data = self.client.dashboard()
+                self.cached_data = data
+            logger.info("auth_resume_success")
             return {"ok": True, "username": username, "data": data}
         except SDOError as error:
+            logger.warning("auth_resume_failed type=SDOError")
             return {"ok": False, "error": str(error)}
         except Exception:
+            logger.exception("auth_resume_failed")
             return {"ok": False, "error": "Не удалось прочитать сохранённый вход"}
 
     def login(self, username: str, password: str):
+        logger.info("auth_login_start")
         try:
             with self._lock:
                 self.client.login(username, password)
                 keyring.set_password(SERVICE, username.strip(), password)
                 keyring.set_password(SERVICE, "__last_user__", username.strip())
                 data = self.client.dashboard()
+                self.cached_data = data
+            logger.info("auth_login_success")
             return {"ok": True, "username": username.strip(), "data": data}
         except SDOError as error:
+            logger.warning("auth_login_failed type=SDOError")
             return {"ok": False, "error": str(error)}
         except Exception:
+            logger.exception("auth_login_failed")
             return {"ok": False, "error": "Не удалось сохранить вход в диспетчере учётных данных Windows"}
 
     def refresh(self):
+        logger.info("data_refresh_start")
         try:
             with self._lock:
-                return {"ok": True, "data": self.client.dashboard()}
+                self.cached_data = self.client.dashboard()
+                logger.info("data_refresh_success")
+                return {"ok": True, "data": self.cached_data}
         except SDOError as error:
+            logger.warning("data_refresh_failed type=SDOError")
             return {"ok": False, "error": str(error)}
 
     def assignments(self, course_url: str):
@@ -108,34 +128,79 @@ class Bridge:
     def open_site(self, url: str):
         try:
             url = safe_url(url)
-            with self._lock:
-                if not self.client.username:
-                    raise SDOError("Сначала войдите в СДО")
-                self.site_target = url
-                if self.site_window is None:
-                    self.site_window = webview.create_window(
-                        "SDO-Reborn — сайт колледжа", BASE + "/login/index.php",
-                        width=1200, height=820, min_size=(850, 600),
-                    )
-                    self.site_window.events.loaded += self._site_loaded
-                    self.site_window.events.closed += self._site_closed
-                else:
-                    self.site_window.load_url(url)
-                    self.site_window.show()
+            parsed = urlparse(url)
+            query = parse_qs(parsed.query)
+            if parsed.path == "/" and query.get("action", [""])[0] in {"kug", "docs", "notice_official"} and "pid" not in query:
+                courses = (self.cached_data or {}).get("courses", [])
+                for course in courses:
+                    candidate = parse_qs(urlparse(course.get("url", "")).query).get("pid", [""])[0]
+                    if candidate.isdecimal():
+                        query["pid"] = [candidate]
+                        url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+                        break
+                if "pid" not in query:
+                    raise SDOError("Не найдена учебная программа для этого раздела")
+            if not self.client.username:
+                raise SDOError("Сначала войдите в СДО")
+            self.site_target = url
+            self.site_login_pending = False
+            logger.info("content_open path=%s", urlparse(url).path)
+            self.window.load_url(url)
             return {"ok": True}
         except SDOError as error:
+            logger.warning("content_open_failed")
             return {"ok": False, "error": str(error)}
 
-    def _site_closed(self):
-        self.site_window = None
-        self.site_login_pending = False
+    def back_to_app(self):
+        logger.info("content_back_to_app")
+        self.window.load_url(str(resource_path("web/index.html")))
+        return {"ok": True}
+
+    def log_event(self, kind: str, detail: str = ""):
+        if kind in {"tab", "course", "notification", "message_open", "message_send", "ui_error", "button"}:
+            logger.info("ui_%s detail=%s", kind, str(detail).replace("\n", " ")[:80])
+        return {"ok": True}
+
+    def get_log_path(self):
+        return str(LOG_FILE)
+
+    def conversations(self):
+        try:
+            with self._lock:
+                rows = self.client.conversations()
+            logger.info("messages_list_loaded count=%d", len(rows))
+            return {"ok": True, "items": rows}
+        except Exception as error:
+            logger.warning("messages_list_failed type=%s", type(error).__name__)
+            return {"ok": False, "error": str(error) if isinstance(error, SDOError) else "Не удалось загрузить сообщения"}
+
+    def conversation_messages(self, conversation_id: int):
+        try:
+            with self._lock:
+                rows = self.client.conversation_messages(conversation_id)
+            logger.info("messages_thread_loaded count=%d", len(rows))
+            return {"ok": True, "items": rows}
+        except Exception as error:
+            logger.warning("messages_thread_failed type=%s", type(error).__name__)
+            return {"ok": False, "error": str(error) if isinstance(error, SDOError) else "Не удалось загрузить переписку"}
+
+    def send_message(self, conversation_id: int, text: str):
+        try:
+            with self._lock:
+                self.client.send_message(conversation_id, text)
+            logger.info("message_sent conversation=%d", int(conversation_id))
+            return {"ok": True}
+        except Exception as error:
+            logger.warning("message_send_failed type=%s", type(error).__name__)
+            return {"ok": False, "error": str(error) if isinstance(error, SDOError) else "Не удалось отправить сообщение"}
 
     def _site_loaded(self):
         """Sign the site window in using the credential stored on this PC, then navigate."""
         try:
-            current = self.site_window.evaluate_js("window.location.href")
+            current = self.window.evaluate_js("window.location.href")
             if not current or not current.startswith(BASE + "/"):
                 return
+            logger.info("content_loaded path=%s", urlparse(current).path)
             if "/login/index.php" in current:
                 if self.site_login_pending:
                     return
@@ -149,16 +214,21 @@ class Bridge:
                   if(!u||!p||!u.form)return false;
                   u.value=%s; p.value=%s; u.form.submit(); return true;
                 })()""" % (json.dumps(username), json.dumps(password))
-                self.site_login_pending = bool(self.site_window.evaluate_js(script))
+                self.site_login_pending = bool(self.window.evaluate_js(script))
                 return
             self.site_login_pending = False
-            if current != self.site_target and current.startswith(BASE + "/"):
-                self.site_window.load_url(self.site_target)
+            if self.site_target and self.site_target != current and urlparse(current).path in ("/", "/my/"):
+                target, self.site_target = self.site_target, ""
+                self.window.load_url(target)
+                return
+            self.site_target = ""
+            self.window.evaluate_js("""(function(){if(document.getElementById('osek-return'))return;const b=document.createElement('button');b.id='osek-return';b.textContent='← Вернуться в ОСЭК-Remastered';b.style.cssText='position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#696cf5;color:white;border:0;border-radius:12px;padding:13px 18px;font:600 14px Segoe UI;box-shadow:0 4px 18px #0005;cursor:pointer';b.onclick=()=>window.pywebview.api.back_to_app();document.body.appendChild(b)})()""")
         except Exception:
-            # A site layout or navigation change must never expose credentials in logs.
+            logger.exception("content_load_error")
             self.site_login_pending = False
 
     def logout(self):
+        logger.info("auth_logout")
         username = keyring.get_password(SERVICE, "__last_user__")
         if username:
             try:
@@ -169,6 +239,7 @@ class Bridge:
         with self._lock:
             self.client.close()
             self.client = SDOClient()
+            self.cached_data = None
         if self.site_window:
             self.site_window.destroy()
             self.site_window = None
@@ -249,13 +320,15 @@ class Bridge:
                 current = {str(item.get("title", "")) + str(item.get("time", "")) for item in items}
                 if initialized and current - self._known_notifications and self._tray:
                     self._tray.notify("Есть новые уведомления в СДО", "SDO-Reborn")
+                    logger.info("notification_new count=%d", len(current - self._known_notifications))
                 self._known_notifications = current
                 initialized = True
             except Exception:
-                pass
+                logger.warning("notification_poll_failed")
 
 
 def main():
+    setup_logging()
     bridge = Bridge()
     window = webview.create_window(
         "ОСЭК-Remastered", str(resource_path("web/index.html")), js_api=bridge,
@@ -263,6 +336,7 @@ def main():
     )
     bridge.window = window
     window.events.closing += bridge._closing
+    window.events.loaded += bridge._site_loaded
 
     def startup():
         bridge._start_tray()

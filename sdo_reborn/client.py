@@ -126,7 +126,57 @@ class SDOClient:
             "events": [asdict(item) for item in parse_events(calendar_html)],
             "deadlines": self.deadlines(my_html),
             "notifications": self.notifications(my_html),
+            "profile": self.profile(my_html),
         }
+
+    @staticmethod
+    def profile(html: str) -> dict:
+        soup = BeautifulSoup(html, "html.parser")
+        name = soup.select_one(".usermenu .usertext")
+        avatar = soup.select_one(".usermenu img.userpicture")
+        return {
+            "name": name.get_text(" ", strip=True) if name else "",
+            "avatar": safe_url(avatar.get("src", "")) if avatar and avatar.get("src") else "",
+        }
+
+    def _message_context(self):
+        html = self._get("/message/index.php")
+        soup = BeautifulSoup(html, "html.parser")
+        link = soup.select_one('.usermenu a[href*="profile.php"]')
+        match = re.search(r"[?&]id=(\d+)", link.get("href", "")) if link else None
+        if not match:
+            raise SDOError("Не удалось определить учётную запись для сообщений")
+        return html, int(match.group(1))
+
+    def conversations(self) -> list[dict]:
+        html, user_id = self._message_context()
+        data = self._ajax(html, "core_message_get_conversations", {"userid": user_id, "limitfrom": 0, "limitnum": 50})
+        own = self._ajax(html, "core_message_get_self_conversation", {"userid": user_id})
+        if not isinstance(data, dict):
+            raise SDOError("Не удалось загрузить сообщения")
+        rows = data.get("conversations", [])
+        if isinstance(own, dict) and own.get("id") and not any(row.get("id") == own["id"] for row in rows):
+            rows.insert(0, own)
+        return [{"id": row.get("id"), "name": row.get("name") or "Сообщения себе", "unread": row.get("unreadcount", 0)} for row in rows if isinstance(row, dict) and row.get("id")]
+
+    def conversation_messages(self, conversation_id: int) -> list[dict]:
+        html, user_id = self._message_context()
+        data = self._ajax(html, "core_message_get_conversation_messages", {"currentuserid": user_id, "convid": int(conversation_id), "limitfrom": 0, "limitnum": 100})
+        if not isinstance(data, dict):
+            raise SDOError("Не удалось загрузить переписку")
+        result = []
+        for row in data.get("messages", []):
+            if isinstance(row, dict):
+                result.append({"text": BeautifulSoup(str(row.get("text", "")), "html.parser").get_text(" ", strip=True), "mine": row.get("useridfrom") == user_id, "time": row.get("timecreated", 0)})
+        return result
+
+    def send_message(self, conversation_id: int, text: str):
+        if not isinstance(text, str) or not text.strip() or len(text) > 10000:
+            raise SDOError("Введите сообщение длиной до 10 000 символов")
+        html, _ = self._message_context()
+        data = self._ajax(html, "core_message_send_messages_to_conversation", {"conversationid": int(conversation_id), "messages": [{"text": text.strip(), "textformat": 0}]})
+        if not isinstance(data, list) or not data:
+            raise SDOError("СДО не подтвердила отправку сообщения")
 
     def curriculum(self) -> list[dict]:
         home = BeautifulSoup(self._get("/"), "html.parser")
@@ -222,7 +272,13 @@ class SDOClient:
         soup = BeautifulSoup(self._get(course_url), "html.parser")
         result = []
         seen = set()
-        for link in soup.select('a[href*="/mod/"]'):
+        for link in soup.select('.sectionname, a[href*="/mod/"]'):
+            if "sectionname" in link.get("class", []):
+                title = link.get_text(" ", strip=True)
+                section = link.find_parent(class_="section")
+                if title and section and section.get("id"):
+                    result.append({"title": title, "url": safe_url(course_url) + "#" + section["id"], "kind": "раздел"})
+                continue
             try:
                 url = safe_url(link.get("href", ""))
             except SDOError:
