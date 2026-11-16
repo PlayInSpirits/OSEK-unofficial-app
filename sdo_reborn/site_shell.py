@@ -76,9 +76,12 @@ class Shell:
                   const form=document.querySelector('input[name="username"]')?.form;
                   if(!form||form.dataset.osekSave)return;
                   form.dataset.osekSave='1';
+                  const animation=document.createElement('style');
+                  animation.textContent='@keyframes osek-spin{to{transform:rotate(360deg)}}#osek-login-status:before{content:"";display:inline-block;width:12px;height:12px;border:2px solid #6669ee;border-top-color:transparent;border-radius:50%;animation:osek-spin .8s linear infinite;margin-right:8px;vertical-align:-2px}';
+                  document.head.appendChild(animation);
                   const status=document.createElement('div');status.id='osek-login-status';
                   status.style.cssText='display:none;padding:14px;color:#6669ee;font:600 14px Segoe UI,Arial,sans-serif';
-                  status.textContent='◌ Подключаюсь к sdo.i-spo.ru';form.appendChild(status);
+                  status.textContent='Подключаюсь к sdo.i-spo.ru';form.appendChild(status);
                   form.addEventListener('submit',function(event){
                     const u=form.querySelector('input[name="username"]')?.value;
                     const p=form.querySelector('input[name="password"]')?.value;
