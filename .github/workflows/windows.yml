@@ -28,12 +28,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path -LiteralPath 'dist/ОСЭК-Remastered.exe')) { throw 'Executable missing' }
           Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/ОСЭК-Remastered.exe' | ForEach-Object { "$($_.Hash.ToLower())  ОСЭК-Remastered.exe" } | Set-Content -Encoding utf8 'dist/SHA256.txt'
+          Compress-Archive -LiteralPath 'dist/ОСЭК-Remastered.exe' -DestinationPath 'dist/OSEK-Remastered-Windows.zip' -Force
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: OSEK-Remastered-Windows
           path: |
             dist/ОСЭК-Remastered.exe
+            dist/OSEK-Remastered-Windows.zip
             dist/SHA256.txt
       - name: Publish preview release
         if: github.ref == 'refs/heads/main'
@@ -41,4 +43,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release create "preview-${{ github.run_number }}" 'dist/ОСЭК-Remastered.exe' 'dist/SHA256.txt' --title "ОСЭК-Remastered preview ${{ github.run_number }}" --notes "Предварительная сборка. Темы курсов и штатные страницы СДО открываются внутри приложения." --prerelease
+          gh release create "preview-${{ github.run_number }}" 'dist/OSEK-Remastered-Windows.zip' 'dist/SHA256.txt' --title "ОСЭК-Remastered preview ${{ github.run_number }}" --notes "Скачайте ZIP и запустите ОСЭК-Remastered.exe внутри. Темы курсов и штатные страницы СДО открываются в приложении." --prerelease
