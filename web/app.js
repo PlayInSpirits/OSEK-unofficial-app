@@ -62,11 +62,13 @@ function render() {
 }
 async function selectCourse(course) {
   $('assignment-heading').textContent = course.title;
+  $('open-course').classList.remove('hidden');
+  $('open-course').onclick = () => openSite(course.url);
   document.querySelectorAll('#assignment-courses button').forEach(node => node.classList.toggle('active', node.dataset.courseId == course.id));
   empty($('assignment-list'), 'Загружаю работы…');
   const result = await window.pywebview.api.assignments(course.url);
   if (!result.ok) { empty($('assignment-list'), result.error); return; }
-  if (!result.items.length) { empty($('assignment-list'), 'На странице курса не найдены задания этого типа.'); return; }
+  if (!result.items.length) { empty($('assignment-list'), 'На странице курса нет доступных ссылок на работы. Откройте курс во встроенном окне.'); return; }
   renderItems($('assignment-list'), result.items.map(item => ({...item, description: 'Открыть форму сдачи во встроенном окне СДО'})), 'deadline');
 }
 async function refresh() {

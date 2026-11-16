@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import asdict, dataclass
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -192,7 +192,7 @@ class SDOClient:
         soup = BeautifulSoup(self._get(course_url), "html.parser")
         seen = set()
         result = []
-        for a in soup.select('a[href*="/mod/assign/view.php"]'):
+        for a in soup.select('a[href*="/mod/assign/view.php"], a[href*="/mod/assignpractice/view.php"]'):
             try:
                 url = safe_url(a.get("href", ""))
             except SDOError:
@@ -200,18 +200,38 @@ class SDOClient:
             if url in seen:
                 continue
             seen.add(url)
-            result.append(asdict(Assignment(a.get_text(" ", strip=True) or "Задание", url)))
+            try:
+                opened = self._request("GET", url)
+            except SDOError:
+                continue
+            if urlparse(opened.url).path not in ("/mod/assign/view.php", "/mod/assignpractice/view.php"):
+                continue
+            result.append(asdict(Assignment(a.get_text(" ", strip=True) or a.get("title") or "Задание", url)))
         return result
 
 
 def parse_courses(html: str) -> list[Course]:
     soup = BeautifulSoup(html, "html.parser")
+    program_id = None
+    for a in soup.select('a[href*="/course/view.php?"]'):
+        try:
+            candidate = parse_qs(urlparse(safe_url(a.get("href", ""))).query).get("pid", [None])[0]
+            if candidate and candidate.isdecimal():
+                program_id = candidate
+                break
+        except SDOError:
+            continue
     seen = set()
     courses = []
     for a in soup.select('a[href*="/course/view.php?id="]'):
         try:
             url = safe_url(a.get("href", ""))
-            course_id = int(parse_qs(urlparse(url).query)["id"][0])
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            course_id = int(params["id"][0])
+            if program_id and "pid" not in params:
+                params["pid"] = [program_id]
+                url = urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
         except (SDOError, KeyError, ValueError, IndexError):
             continue
         title = a.get("title") or a.get_text(" ", strip=True)

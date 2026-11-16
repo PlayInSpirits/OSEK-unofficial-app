@@ -21,6 +21,11 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(events[0].when, "Завтра , 08:50")
         self.assertEqual(events[0].kind, "bbbevents")
 
+    def test_course_uses_program_id_from_navigation(self):
+        html = '''<a href="/course/view.php?id=9">Мой курс</a>
+                  <a href="/course/view.php?id=1&amp;pid=8655">Меню программы</a>'''
+        self.assertEqual(parse_courses(html)[0].url, "https://sdo.i-spo.ru/course/view.php?id=9&pid=8655")
+
     def test_reject_external_url(self):
         with self.assertRaises(SDOError):
             safe_url("https://example.com/steal")
