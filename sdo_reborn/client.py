@@ -128,6 +128,31 @@ class SDOClient:
             "notifications": self.notifications(my_html),
         }
 
+    def curriculum(self) -> list[dict]:
+        home = BeautifulSoup(self._get("/"), "html.parser")
+        program = home.select_one('a[href*="?pid="]')
+        if not program:
+            return []
+        params = parse_qs(urlparse(safe_url(program.get("href", ""))).query)
+        pid = params.get("pid", [""])[0]
+        if not pid.isdecimal():
+            return []
+        soup = BeautifulSoup(self._get(f"/?pid={pid}"), "html.parser")
+        result = []
+        for card in soup.select(".columnGrid"):
+            link = card.select_one('.columnGrid h5 a[href*="/course/view.php"]')
+            if not link:
+                continue
+            teacher = card.select_one(".course-teacher-plan-name")
+            hours = card.select_one(".time-span")
+            control = card.select_one(".control-div")
+            try:
+                url = safe_url(link.get("href", ""))
+            except SDOError:
+                continue
+            result.append({"title": link.get_text(" ", strip=True), "teacher": teacher.get_text(" ", strip=True) if teacher else "", "hours": hours.get_text(" ", strip=True) if hours else "", "control": control.get_text(" ", strip=True) if control else "", "url": url})
+        return result
+
     def _ajax(self, page_html: str, method: str, args: dict):
         match = re.search(r'''["']?sesskey["']?\s*[:=]\s*["']?([a-zA-Z0-9]+)''', page_html)
         if not match:
@@ -182,7 +207,35 @@ class SDOClient:
             if not isinstance(item, dict):
                 continue
             subject = BeautifulSoup(str(item.get("subject", "Уведомление")), "html.parser").get_text(" ", strip=True)
-            result.append({"title": subject, "time": item.get("timecreated")})
+            url = item.get("contexturl") or item.get("url") or "/message/output/popup/notifications.php"
+            try:
+                url = safe_url(url)
+            except SDOError:
+                url = BASE + "/message/output/popup/notifications.php"
+            result.append({"title": subject, "time": item.get("timecreated"), "url": url})
+        return result
+
+    def topics(self, course_url: str) -> list[dict]:
+        parsed = urlparse(safe_url(course_url))
+        if parsed.path != "/course/view.php" or not parse_qs(parsed.query).get("id"):
+            raise SDOError("Некорректная ссылка на курс")
+        soup = BeautifulSoup(self._get(course_url), "html.parser")
+        result = []
+        seen = set()
+        for link in soup.select('a[href*="/mod/"]'):
+            try:
+                url = safe_url(link.get("href", ""))
+            except SDOError:
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            title = link.get_text(" ", strip=True) or link.get("title") or ""
+            if not title:
+                parent = link.find_parent(class_="activity")
+                title = parent.get_text(" ", strip=True)[:120] if parent else ""
+            if title:
+                result.append({"title": title, "url": url, "kind": urlparse(url).path.split("/")[2]})
         return result
 
     def assignments(self, course_url: str) -> list[dict]:

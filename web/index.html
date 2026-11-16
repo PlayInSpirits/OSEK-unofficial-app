@@ -4,35 +4,45 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; form-action 'none'">
-  <title>SDO-Reborn</title>
+  <title>ОСЭК-Remastered</title>
+  <link rel="icon" href="icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="login" class="login-screen">
     <div class="login-card">
-      <div class="logo">S</div>
+      <img class="app-icon" src="icon.png" alt="ОСЭК">
       <p class="eyebrow">КОЛЛЕДЖ · УЧЁБА</p>
       <h1>Ваш день в одном месте.</h1>
-      <p class="muted">Войдите с данными СДО. Они сохраняются только в диспетчере учётных данных Windows.</p>
+      <p class="muted">Пароль хранится локально на вашем компьютере в диспетчере учётных данных Windows.</p>
+      <div id="resume-state" class="resume-state hidden"><span class="spinner"></span><span>Выполняется вход с сохранёнными данными…</span></div>
       <form id="login-form">
         <label for="username">Логин</label><input id="username" autocomplete="username" required>
         <label for="password">Пароль</label><input id="password" type="password" autocomplete="current-password" required>
         <button type="submit" class="primary full">Войти</button>
       </form>
       <p id="login-status" class="status" role="status"></p>
-      <small>Неофициальный клиент · Подключение только к sdo.i-spo.ru</small>
+      <small>Неофициальный клиент · Данные входа остаются на этом компьютере</small>
     </div>
   </div>
 
   <div id="app" class="app hidden">
     <aside class="sidebar">
-      <div class="brand"><div class="logo small">S</div><span>SDO<span class="accent">/</span>Reborn</span></div>
+      <div class="brand"><img class="brand-icon" src="icon.png" alt=""><span>ОСЭК<span class="accent">/</span>Remastered</span></div>
       <div class="nav-caption">РАБОЧЕЕ ПРОСТРАНСТВО</div>
       <nav aria-label="Разделы">
         <button class="nav active" data-page="home"><span>⌂</span> Главная</button>
         <button class="nav" data-page="courses"><span>▦</span> Курсы</button>
+        <button class="nav" data-page="curriculum"><span>◈</span> Учебный план</button>
         <button class="nav" data-page="assignments"><span>✓</span> Работы</button>
         <button class="nav" data-page="notifications"><span>♧</span> Уведомления</button>
+        <button class="nav" data-site="/my/"><span>▤</span> Личный кабинет</button>
+        <button class="nav" data-site="/calendar/view.php?view=upcoming"><span>◷</span> Календарь</button>
+        <button class="nav" data-site="/message/index.php"><span>✉</span> Сообщения</button>
+        <button class="nav" data-site="/?action=docs"><span>▧</span> Документы</button>
+        <button class="nav" data-site="/?action=notice_official"><span>◉</span> Новости</button>
+        <button class="nav" data-site="/?action=bbb_calendar"><span>▣</span> Онлайн-занятия</button>
+        <button class="nav" data-site="/?action=kug"><span>▥</span> Учебный график</button>
       </nav>
       <div class="sidebar-bottom">
         <button class="nav" data-page="settings"><span>⚙</span> Настройки</button>
@@ -47,8 +57,9 @@
         <div class="stats"><div class="stat"><small>КУРСЫ</small><strong id="count-courses">—</strong></div><div class="stat"><small>БЛИЖАЙШИЕ СОБЫТИЯ</small><strong id="count-events">—</strong></div><div class="stat"><small>УВЕДОМЛЕНИЯ</small><strong id="count-notifications">—</strong></div></div>
         <div class="grid-two"><div class="panel"><div class="panel-head"><div><p class="eyebrow">РАСПИСАНИЕ</p><h2>Ближайшие события</h2></div><button class="text-link" data-page="courses">Курсы →</button></div><div id="home-events" class="list"></div></div><div class="panel"><div class="panel-head"><div><p class="eyebrow">НЕ ПРОПУСТИТЕ</p><h2>Сроки заданий</h2></div></div><div id="home-deadlines" class="list"></div></div></div>
       </section>
-      <section id="page-courses" class="page hidden"><div class="heading"><p class="eyebrow">ОБУЧЕНИЕ</p><h1>Ваши курсы</h1><p class="muted">Откройте курс, чтобы увидеть доступные работы.</p></div><div id="courses-list" class="course-grid"></div></section>
-      <section id="page-assignments" class="page hidden"><div class="heading"><p class="eyebrow">СДАЧА РАБОТ</p><h1>Работы по курсам</h1><p class="muted">Выберите курс. Работа откроется во встроенном окне СДО; загрузка и подтверждение выполняются через форму колледжа.</p></div><div class="assignment-layout"><div id="assignment-courses" class="course-picker"></div><div class="panel"><div class="panel-head"><h2 id="assignment-heading">Выберите курс</h2><button id="open-course" class="ghost hidden">↗ Открыть курс</button></div><div id="assignment-list" class="list"><p class="empty">Задания появятся здесь.</p></div></div></div></section>
+      <section id="page-courses" class="page hidden"><div class="heading"><p class="eyebrow">ОБУЧЕНИЕ</p><h1>Ваши курсы</h1><p class="muted">Откройте курс, чтобы увидеть все доступные темы и материалы.</p></div><div id="courses-list" class="course-grid"></div></section>
+      <section id="page-curriculum" class="page hidden"><div class="heading"><p class="eyebrow">УЧЕБНЫЙ ПЛАН</p><h1>Предметы и преподаватели</h1><p class="muted">Данные со страницы учебного плана колледжа.</p></div><div id="curriculum-list" class="course-grid"></div></section>
+      <section id="page-assignments" class="page hidden"><div class="heading"><p class="eyebrow">МАТЕРИАЛЫ КУРСА</p><h1>Темы и работы</h1><p class="muted">Выберите курс. Материалы и доступные формы сдачи откроются в окне СДО.</p></div><div class="assignment-layout"><div id="assignment-courses" class="course-picker"></div><div class="panel"><div class="panel-head"><h2 id="assignment-heading">Выберите курс</h2><button id="open-course" class="ghost hidden">↗ Открыть курс</button></div><div id="assignment-list" class="list"><p class="empty">Темы появятся здесь.</p></div></div></div></section>
       <section id="page-notifications" class="page hidden"><div class="heading"><p class="eyebrow">НОВОЕ</p><h1>Уведомления</h1><p class="muted">Последние сообщения системы.</p></div><div class="panel"><div id="notifications-list" class="list"></div></div></section>
       <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><label class="setting"><span><strong>Тёмная тема</strong><small>Оформление интерфейса</small></span><input id="dark-theme" type="checkbox" checked></label><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div></div><p class="muted note">Для отправки работы используется настоящая страница СДО во встроенном окне. Перед окончательной отправкой проверьте выбранные файлы и статус на сайте.</p></section>
     </main>

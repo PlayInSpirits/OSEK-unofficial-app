@@ -15,6 +15,7 @@ function empty(parent, text) { parent.replaceChildren(element('p', 'empty', text
 function showPage(page) {
   document.querySelectorAll('.page').forEach(node => node.classList.toggle('hidden', node.id !== 'page-' + page));
   document.querySelectorAll('.nav').forEach(node => node.classList.toggle('active', node.dataset.page === page));
+  if (page === 'curriculum') loadCurriculum();
 }
 async function openSite(url) {
   const result = await window.pywebview.api.open_site(url);
@@ -35,6 +36,7 @@ function renderItems(parent, items, kind) {
       const button = element('button', '', 'Открыть ↗');
       button.addEventListener('click', () => openSite(item.url));
       row.append(button);
+      if (kind === 'notification') { row.classList.add('clickable'); row.addEventListener('click', () => openSite(item.url)); button.remove(); }
     }
     parent.append(row);
   }
@@ -50,7 +52,7 @@ function render() {
   const picker = $('assignment-courses'); picker.replaceChildren();
   for (const course of model.courses) {
     const card = element('button', 'course-card');
-    card.append(element('div', 'course-mark', '▤'), element('strong', '', course.title), element('small', '', 'Смотреть работы →'));
+    card.append(element('div', 'course-mark', '▤'), element('strong', '', course.title), element('small', '', 'Смотреть темы →'));
     card.addEventListener('click', () => { showPage('assignments'); selectCourse(course); });
     cards.append(card);
     const pick = element('button', '', course.title);
@@ -65,11 +67,29 @@ async function selectCourse(course) {
   $('open-course').classList.remove('hidden');
   $('open-course').onclick = () => openSite(course.url);
   document.querySelectorAll('#assignment-courses button').forEach(node => node.classList.toggle('active', node.dataset.courseId == course.id));
-  empty($('assignment-list'), 'Загружаю работы…');
-  const result = await window.pywebview.api.assignments(course.url);
+  empty($('assignment-list'), 'Загружаю темы…');
+  const result = await window.pywebview.api.topics(course.url);
   if (!result.ok) { empty($('assignment-list'), result.error); return; }
-  if (!result.items.length) { empty($('assignment-list'), 'На странице курса нет доступных ссылок на работы. Откройте курс во встроенном окне.'); return; }
-  renderItems($('assignment-list'), result.items.map(item => ({...item, description: 'Открыть форму сдачи во встроенном окне СДО'})), 'deadline');
+  if (!result.items.length) { empty($('assignment-list'), 'Темы не найдены. Откройте курс во встроенном окне.'); return; }
+  renderItems($('assignment-list'), result.items.map(item => ({...item, description: item.kind})), 'deadline');
+}
+let curriculumLoaded = false;
+async function loadCurriculum() {
+  if (curriculumLoaded) return;
+  empty($('curriculum-list'), 'Загружаю учебный план…');
+  const result = await window.pywebview.api.curriculum();
+  if (!result.ok) { empty($('curriculum-list'), result.error); return; }
+  curriculumLoaded = true;
+  const list = $('curriculum-list'); list.replaceChildren();
+  for (const item of result.items) {
+    const card = element('button', 'course-card curriculum-card');
+    card.append(element('div', 'course-mark', '◈'), element('strong', '', item.title));
+    if (item.teacher) card.append(element('p', '', 'Преподаватель: ' + item.teacher));
+    if (item.hours) card.append(element('small', '', 'Часы: ' + item.hours));
+    if (item.control) card.append(element('small', '', 'Форма контроля: ' + item.control));
+    card.addEventListener('click', () => openSite(item.url)); list.append(card);
+  }
+  if (!result.items.length) empty(list, 'Учебный план пока недоступен.');
 }
 async function refresh() {
   showMessage('');
@@ -88,12 +108,19 @@ function signedIn(result) {
 }
 async function init() {
   const result = await window.pywebview.api.bootstrap();
-  if (result.ok) signedIn(result);
-  else $('username').value = result.username || '';
+  $('username').value = result.username || '';
+  if (result.saved) {
+    $('resume-state').classList.remove('hidden'); $('login-form').classList.add('hidden');
+    const resumed = await window.pywebview.api.resume();
+    $('resume-state').classList.add('hidden'); $('login-form').classList.remove('hidden');
+    if (resumed.ok) signedIn(resumed);
+    else $('login-status').textContent = resumed.error || 'Не удалось войти автоматически';
+  }
   const settings = await window.pywebview.api.settings();
   $('autostart').checked = !!settings.autostart;
 }
 document.querySelectorAll('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
+document.querySelectorAll('[data-site]').forEach(button => button.addEventListener('click', () => openSite('https://sdo.i-spo.ru' + button.dataset.site)));
 $('login-form').addEventListener('submit', async event => {
   event.preventDefault();
   $('login-status').textContent = 'Подключаюсь к СДО…';

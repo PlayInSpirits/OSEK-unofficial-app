@@ -7,12 +7,11 @@ import os
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 import keyring
 import webview
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from .client import BASE, SDOClient, SDOError, safe_url
 
@@ -27,11 +26,7 @@ def resource_path(name: str) -> Path:
 
 
 def icon_image() -> Image.Image:
-    image = Image.new("RGB", (64, 64), "#151b30")
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((5, 5, 59, 59), radius=15, fill="#595cf2")
-    draw.text((17, 19), "S", fill="white", stroke_width=1)
-    return image
+    return Image.open(resource_path("assets/icon.png")).convert("RGBA")
 
 
 class Bridge:
@@ -52,14 +47,22 @@ class Bridge:
             password = keyring.get_password(SERVICE, username) if username else None
         except Exception:
             return {"ok": False, "username": ""}
-        if username and password:
-            try:
-                with self._lock:
-                    self.client.login(username, password)
-                    return {"ok": True, "username": username, "data": self.client.dashboard()}
-            except SDOError:
-                pass
-        return {"ok": False, "username": username or ""}
+        return {"saved": bool(username and password), "username": username or ""}
+
+    def resume(self):
+        try:
+            username = keyring.get_password(SERVICE, "__last_user__")
+            password = keyring.get_password(SERVICE, username) if username else None
+            if not username or not password:
+                return {"ok": False, "error": "Сохранённый вход не найден"}
+            with self._lock:
+                self.client.login(username, password)
+                data = self.client.dashboard()
+            return {"ok": True, "username": username, "data": data}
+        except SDOError as error:
+            return {"ok": False, "error": str(error)}
+        except Exception:
+            return {"ok": False, "error": "Не удалось прочитать сохранённый вход"}
 
     def login(self, username: str, password: str):
         try:
@@ -85,6 +88,20 @@ class Bridge:
         try:
             with self._lock:
                 return {"ok": True, "items": self.client.assignments(course_url)}
+        except SDOError as error:
+            return {"ok": False, "error": str(error)}
+
+    def topics(self, course_url: str):
+        try:
+            with self._lock:
+                return {"ok": True, "items": self.client.topics(course_url)}
+        except SDOError as error:
+            return {"ok": False, "error": str(error)}
+
+    def curriculum(self):
+        try:
+            with self._lock:
+                return {"ok": True, "items": self.client.curriculum()}
         except SDOError as error:
             return {"ok": False, "error": str(error)}
 
@@ -141,13 +158,6 @@ class Bridge:
             # A site layout or navigation change must never expose credentials in logs.
             self.site_login_pending = False
 
-    def open_browser(self, url: str):
-        try:
-            webbrowser.open(safe_url(url))
-            return {"ok": True}
-        except SDOError as error:
-            return {"ok": False, "error": str(error)}
-
     def logout(self):
         username = keyring.get_password(SERVICE, "__last_user__")
         if username:
@@ -178,10 +188,10 @@ class Bridge:
                     command = f'"{sys.executable}"'
                     if not getattr(sys, "frozen", False):
                         command += ' -m sdo_reborn'
-                    winreg.SetValueEx(key, "SDO-Reborn", 0, winreg.REG_SZ, command)
+                    winreg.SetValueEx(key, "ОСЭК-Remastered", 0, winreg.REG_SZ, command)
                 else:
                     try:
-                        winreg.DeleteValue(key, "SDO-Reborn")
+                        winreg.DeleteValue(key, "ОСЭК-Remastered")
                     except FileNotFoundError:
                         pass
             return {"ok": True, "autostart": enabled}
@@ -195,7 +205,7 @@ class Bridge:
 
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-                winreg.QueryValueEx(key, "SDO-Reborn")
+                winreg.QueryValueEx(key, "ОСЭК-Remastered")
                 return True
         except OSError:
             return False
@@ -218,10 +228,10 @@ class Bridge:
             import pystray
 
             menu = pystray.Menu(
-                pystray.MenuItem("Открыть SDO-Reborn", lambda: self.window.show(), default=True),
+                pystray.MenuItem("Открыть ОСЭК-Remastered", lambda: self.window.show(), default=True),
                 pystray.MenuItem("Выход", self._quit),
             )
-            self._tray = pystray.Icon("SDO-Reborn", icon_image(), "SDO-Reborn", menu)
+            self._tray = pystray.Icon("ОСЭК-Remastered", icon_image(), "ОСЭК-Remastered", menu)
             self._tray.run_detached()
         except Exception:
             self._tray = None
@@ -248,7 +258,7 @@ class Bridge:
 def main():
     bridge = Bridge()
     window = webview.create_window(
-        "SDO-Reborn", str(resource_path("web/index.html")), js_api=bridge,
+        "ОСЭК-Remastered", str(resource_path("web/index.html")), js_api=bridge,
         width=1180, height=780, min_size=(850, 600), background_color="#111827",
     )
     bridge.window = window

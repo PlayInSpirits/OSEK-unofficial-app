@@ -1,4 +1,4 @@
-name: Build SDO-Reborn for Windows
+name: Build ОСЭК-Remastered for Windows
 
 on:
   push:
@@ -24,16 +24,16 @@ jobs:
       - name: Build executable
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx --name SDO-Reborn --add-data "web:web" --collect-all webview --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx --name ОСЭК-Remastered --icon assets/icon.ico --add-data "web:web" --add-data "assets/icon.png:assets" --collect-all webview --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (!(Test-Path -LiteralPath 'dist/SDO-Reborn.exe')) { throw 'Executable missing' }
-          Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/SDO-Reborn.exe' | ForEach-Object { "$($_.Hash.ToLower())  SDO-Reborn.exe" } | Set-Content -Encoding ascii 'dist/SHA256.txt'
+          if (!(Test-Path -LiteralPath 'dist/ОСЭК-Remastered.exe')) { throw 'Executable missing' }
+          Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/ОСЭК-Remastered.exe' | ForEach-Object { "$($_.Hash.ToLower())  ОСЭК-Remastered.exe" } | Set-Content -Encoding utf8 'dist/SHA256.txt'
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SDO-Reborn-Windows
+          name: OSEK-Remastered-Windows
           path: |
-            dist/SDO-Reborn.exe
+            dist/ОСЭК-Remastered.exe
             dist/SHA256.txt
       - name: Publish preview release
         if: github.ref == 'refs/heads/main'
@@ -41,4 +41,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release create "preview-${{ github.run_number }}" 'dist/SDO-Reborn.exe' 'dist/SHA256.txt' --title "SDO-Reborn preview ${{ github.run_number }}" --notes "Предварительная сборка. Отправка работ открывает штатную страницу СДО во встроенном окне." --prerelease
+          gh release create "preview-${{ github.run_number }}" 'dist/ОСЭК-Remastered.exe' 'dist/SHA256.txt' --title "ОСЭК-Remastered preview ${{ github.run_number }}" --notes "Предварительная сборка. Темы курсов и штатные страницы СДО открываются внутри приложения." --prerelease
