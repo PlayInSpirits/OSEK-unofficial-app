@@ -47,8 +47,11 @@ class Bridge:
         self._known_notifications: set[str] = set()
 
     def bootstrap(self):
-        username = keyring.get_password(SERVICE, "__last_user__")
-        password = keyring.get_password(SERVICE, username) if username else None
+        try:
+            username = keyring.get_password(SERVICE, "__last_user__")
+            password = keyring.get_password(SERVICE, username) if username else None
+        except Exception:
+            return {"ok": False, "username": ""}
         if username and password:
             try:
                 with self._lock:
@@ -98,12 +101,17 @@ class Bridge:
                         width=1200, height=820, min_size=(850, 600),
                     )
                     self.site_window.events.loaded += self._site_loaded
+                    self.site_window.events.closed += self._site_closed
                 else:
                     self.site_window.load_url(url)
                     self.site_window.show()
             return {"ok": True}
         except SDOError as error:
             return {"ok": False, "error": str(error)}
+
+    def _site_closed(self):
+        self.site_window = None
+        self.site_login_pending = False
 
     def _site_loaded(self):
         """Sign the site window in using the credential stored on this PC, then navigate."""
@@ -219,6 +227,7 @@ class Bridge:
             self._tray = None
 
     def _background(self):
+        initialized = False
         while not self._quitting:
             time.sleep(900)
             if not self.client.username:
@@ -228,9 +237,10 @@ class Bridge:
                     page = self.client._get("/my/")
                     items = self.client.notifications(page)
                 current = {str(item.get("title", "")) + str(item.get("time", "")) for item in items}
-                if self._known_notifications and current - self._known_notifications and self._tray:
+                if initialized and current - self._known_notifications and self._tray:
                     self._tray.notify("Есть новые уведомления в СДО", "SDO-Reborn")
                 self._known_notifications = current
+                initialized = True
             except Exception:
                 pass
 

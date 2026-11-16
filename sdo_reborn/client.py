@@ -162,7 +162,10 @@ class SDOClient:
         return result
 
     def notifications(self, my_html: str) -> list[dict]:
-        page = self._get("/message/output/popup/notifications.php")
+        try:
+            page = self._get("/message/output/popup/notifications.php")
+        except SDOError:
+            return []
         soup = BeautifulSoup(page, "html.parser")
         area = soup.select_one('[data-region="notification-area"][data-user-id]')
         if not area:

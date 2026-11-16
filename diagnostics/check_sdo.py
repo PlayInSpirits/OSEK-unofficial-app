@@ -75,7 +75,8 @@ def check_ajax(opener, sesskey: str, name: str, arguments: dict) -> str:
         return "неожиданный формат ответа"
     item = result[0]
     if item.get("error"):
-        code = str(item.get("exception", {}).get("errorcode", "неизвестно"))
+        exception = item.get("exception")
+        code = str(exception.get("errorcode", "неизвестно") if isinstance(exception, dict) else "неизвестно")
         code = re.sub(r"[^a-zA-Z0-9_ -]", "", code)[:60]
         return f"ошибка Moodle: {code}"
     data = item.get("data")
