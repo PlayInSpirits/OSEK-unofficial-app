@@ -24,7 +24,7 @@ jobs:
       - name: Build executable
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx --name ОСЭК-Remastered --icon assets/icon.ico --add-data "web:web" --add-data "assets/icon.png:assets" --collect-all webview --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx --name ОСЭК-Remastered --icon assets/icon.ico --add-data "assets/icon.png:assets" --collect-all webview --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path -LiteralPath 'dist/ОСЭК-Remastered/ОСЭК-Remastered.exe')) { throw 'Executable missing' }
           Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/ОСЭК-Remastered/ОСЭК-Remastered.exe' | ForEach-Object { "$($_.Hash.ToLower())  ОСЭК-Remastered.exe" } | Set-Content -Encoding utf8 'dist/SHA256.txt'

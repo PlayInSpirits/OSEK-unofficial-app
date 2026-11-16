@@ -1,4 +1,6 @@
 pages/
+*AcademCity/
+assets/academcity-contact-sheet.jpg
 __pycache__/
 *.py[cod]
 .venv/
