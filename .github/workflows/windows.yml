@@ -1,0 +1,44 @@
+name: Build SDO-Reborn for Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run parser tests
+        run: python -m unittest discover -s tests -v
+      - name: Build executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx --name SDO-Reborn --add-data "web:web" --collect-all webview --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path -LiteralPath 'dist/SDO-Reborn.exe')) { throw 'Executable missing' }
+          Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/SDO-Reborn.exe' | ForEach-Object { "$($_.Hash.ToLower())  SDO-Reborn.exe" } | Set-Content -Encoding ascii 'dist/SHA256.txt'
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SDO-Reborn-Windows
+          path: |
+            dist/SDO-Reborn.exe
+            dist/SHA256.txt
+      - name: Publish preview release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create "preview-${{ github.run_number }}" 'dist/SDO-Reborn.exe' 'dist/SHA256.txt' --title "SDO-Reborn preview ${{ github.run_number }}" --notes "Предварительная сборка. Отправка работ открывает штатную страницу СДО во встроенном окне." --prerelease

@@ -1,0 +1,11 @@
+pages/
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.spec
+*.log
+*.db
+*.sqlite*
+.env
