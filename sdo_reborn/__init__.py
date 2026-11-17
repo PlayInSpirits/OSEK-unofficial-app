@@ -1,1 +1,0 @@
-"""SDO-Reborn desktop client."""
