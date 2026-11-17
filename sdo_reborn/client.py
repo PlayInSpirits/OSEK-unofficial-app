@@ -178,6 +178,39 @@ class SDOClient:
                 result.append({"text": BeautifulSoup(str(row.get("text", "")), "html.parser").get_text(" ", strip=True), "mine": row.get("useridfrom") == user_id, "time": row.get("timecreated", 0)})
         return result
 
+    def search_people(self, term: str) -> list[dict]:
+        if not isinstance(term, str) or not 2 <= len(term.strip()) <= 120:
+            raise SDOError("Введите от 2 до 120 символов для поиска")
+        html, user_id = self._message_context()
+        data = self._ajax(html, "core_message_message_search_users", {
+            "userid": user_id, "search": term.strip(), "limitfrom": 0, "limitnum": 20,
+        })
+        if not isinstance(data, dict):
+            raise SDOError("СДО не ответила на поиск собеседников")
+        rows = []
+        for group in ("contacts", "noncontacts"):
+            for person in data.get(group, []):
+                conversations = person.get("conversations") or []
+                direct = next(
+                    (item["id"] for item in conversations if item.get("type") == 1 and item.get("id")),
+                    None,
+                )
+                rows.append({
+                    "userId": person["id"], "id": direct, "name": person["fullname"],
+                    "canMessage": bool(person.get("canmessage")), "isContact": group == "contacts",
+                })
+        return rows
+
+    def send_to_user(self, user_id: int, text: str):
+        if not isinstance(text, str) or not text.strip() or len(text) > 10000:
+            raise SDOError("Введите сообщение длиной до 10 000 символов")
+        html, _ = self._message_context()
+        data = self._ajax(html, "core_message_send_instant_messages", {
+            "messages": [{"touserid": int(user_id), "text": text.strip(), "textformat": 0}],
+        })
+        if not isinstance(data, list) or not data or int(data[0].get("msgid") or 0) <= 0:
+            raise SDOError("СДО не подтвердила доставку первого сообщения")
+
     def send_message(self, conversation_id: int, text: str):
         if not isinstance(text, str) or not text.strip() or len(text) > 10000:
             raise SDOError("Введите сообщение длиной до 10 000 символов")

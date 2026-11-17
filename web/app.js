@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 let model = { courses: [], events: [], deadlines: [], notifications: [] };
 let currentConversation = null;
 let messagesLoaded = false;
+let conversationListVersion = 0;
 let activeResource = '';
 let resourceVersion = 0;
 let topicVersion = 0;
@@ -309,6 +310,7 @@ $('logout').addEventListener('click', async () => {
   await window.pywebview.api.logout();
   ++resourceVersion;
   ++topicVersion;
+  ++conversationListVersion;
   programRequest = null;
   $('curriculum-program').replaceChildren();
   $('resource-program').replaceChildren();
@@ -316,6 +318,10 @@ $('logout').addEventListener('click', async () => {
   $('conversation-list').replaceChildren();
   $('conversation-messages').replaceChildren();
   $('message-text').value = '';
+  $('people-search-input').value = '';
+  $('back-to-conversations').classList.add('hidden');
+  $('message-form').classList.add('hidden');
+  $('conversation-title').textContent = 'Выберите переписку';
   currentConversation = null;
   messagesLoaded = false;
   curriculumLoaded = false;
@@ -333,8 +339,11 @@ window.addEventListener('unhandledrejection', () => logAction('ui_error', 'promi
 document.addEventListener('click', event => { const button = event.target.closest('button'); if (button?.id) logAction('button', button.id); });
 
 async function loadConversations() {
+  const version = ++conversationListVersion;
+  $('back-to-conversations').classList.add('hidden');
   empty($('conversation-list'), 'Загружаю переписки…');
   const result = await window.pywebview.api.conversations();
+  if (version !== conversationListVersion) return;
   if (!result.ok) { empty($('conversation-list'), result.error); return; }
   messagesLoaded = true;
   const list = $('conversation-list'); list.replaceChildren();
@@ -345,11 +354,42 @@ async function loadConversations() {
   }
   if (!result.items.length) empty(list, 'Переписок пока нет.');
 }
+
+$('people-search-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const version = ++conversationListVersion;
+  const list = $('conversation-list');
+  $('back-to-conversations').classList.remove('hidden');
+  empty(list, 'Ищу собеседников…');
+  const result = await window.pywebview.api.search_people($('people-search-input').value);
+  if (version !== conversationListVersion) return;
+  if (!result.ok) {
+    empty(list, result.error);
+    return;
+  }
+  list.replaceChildren();
+  for (const person of result.data) {
+    const row = element('button', 'conversation-row', person.name);
+    row.addEventListener('click', () => openConversation(person));
+    list.append(row);
+  }
+  if (!result.data.length) empty(list, 'СДО не нашла собеседников.');
+});
+$('back-to-conversations').addEventListener('click', () => {
+  $('people-search-input').value = '';
+  loadConversations();
+});
+
 async function openConversation(item) {
   currentConversation = item;
   logAction('message_open', item.id);
   $('conversation-title').textContent = item.name;
   $('message-form').classList.add('hidden');
+  if (!item.id) {
+    empty($('conversation-messages'), item.canMessage ? 'Новая переписка' : 'СДО запретила отправку сообщений этому собеседнику.');
+    $('message-form').classList.toggle('hidden', !item.canMessage);
+    return;
+  }
   empty($('conversation-messages'), 'Загружаю сообщения…');
   const result = await window.pywebview.api.conversation_messages(item.id);
   if (currentConversation !== item) return;
@@ -369,11 +409,22 @@ $('message-form').addEventListener('submit', async event => {
   if (!text) return;
   const conversation = currentConversation;
   $('message-form').querySelector('button').disabled = true;
-  const result = await window.pywebview.api.send_message(conversation.id, text);
-  $('message-form').querySelector('button').disabled = false;
+  let result;
+  try {
+    result = conversation.id
+      ? await window.pywebview.api.send_message(conversation.id, text)
+      : await window.pywebview.api.send_to_user(conversation.userId, text);
+  } finally {
+    $('message-form').querySelector('button').disabled = false;
+  }
   logAction('message_send', result.ok ? 'success' : 'failed');
   if (!result.ok) { showMessage(result.error); return; }
   if (currentConversation !== conversation) return;
   $('message-text').value = '';
-  await openConversation(conversation);
+  if (conversation.id) {
+    await openConversation(conversation);
+  } else {
+    empty($('conversation-messages'), 'СДО подтвердила отправку. Новая беседа появится в списке переписок.');
+    await loadConversations();
+  }
 });

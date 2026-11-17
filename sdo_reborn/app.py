@@ -38,6 +38,7 @@ class Bridge:
         "bootstrap", "resume", "login", "refresh", "topics", "curriculum",
         "programs", "student_section", "open_site", "back_to_app", "log_event",
         "get_log_path", "conversations", "conversation_messages", "send_message",
+        "search_people", "send_to_user",
         "logout", "settings", "set_autostart",
     )
 
@@ -233,6 +234,12 @@ class Bridge:
             logger.warning("messages_list_failed type=%s", type(error).__name__)
             return {"ok": False, "error": str(error) if isinstance(error, SDOError) else "Не удалось загрузить сообщения"}
 
+    def search_people(self, query):
+        return self._section_operation("people_search", self.client.search_people, query)
+
+    def send_to_user(self, user_id, body):
+        return self._section_operation("direct_message", self.client.send_to_user, user_id, body)
+
     def conversation_messages(self, conversation_id: int):
         try:
             with self._lock:
@@ -388,6 +395,8 @@ class Bridge:
 def main():
     setup_logging()
     install_requirejs_compatibility()
+    # Each running copy must serve its own UI assets, including when an older copy is in the tray.
+    webview.settings["DEFAULT_HTTP_PORT"] = 0
     bridge = Bridge()
     window = webview.create_window(
         "ОСЭК-Remastered", str(resource_path("web/index.html")), js_api=bridge,

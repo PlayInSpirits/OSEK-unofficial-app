@@ -81,7 +81,27 @@
         <p id="resource-status" class="muted" role="status"></p>
         <div id="resource-content" class="resource-content"></div>
       </section>
-      <section id="page-messages" class="page hidden"><div class="heading"><p class="eyebrow">ОБЩЕНИЕ</p><h1>Сообщения</h1><p class="muted">Переписки вашего аккаунта СДО.</p></div><div class="messages-layout"><div id="conversation-list" class="panel conversation-list"><p class="empty">Загружаю переписки…</p></div><div class="panel conversation-panel"><h2 id="conversation-title">Выберите переписку</h2><div id="conversation-messages" class="conversation-messages"></div><form id="message-form" class="message-form hidden"><input id="message-text" maxlength="10000" placeholder="Написать сообщение…" aria-label="Текст сообщения"><button class="primary" type="submit">Отправить</button></form></div></div></section>
+      <section id="page-messages" class="page hidden">
+        <div class="heading"><h1>Сообщения</h1></div>
+        <div class="messages-layout">
+          <div class="panel conversation-list">
+            <form id="people-search-form" class="people-search">
+              <input id="people-search-input" type="search" minlength="2" maxlength="120" required placeholder="Имя или фамилия" aria-label="Имя или фамилия собеседника">
+              <button type="submit" class="ghost">Найти</button>
+            </form>
+            <button id="back-to-conversations" class="ghost hidden" type="button">← Мои переписки</button>
+            <div id="conversation-list" aria-live="polite"><p class="empty">Загружаю переписки…</p></div>
+          </div>
+          <div class="panel conversation-panel">
+            <h2 id="conversation-title">Выберите переписку</h2>
+            <div id="conversation-messages" class="conversation-messages"></div>
+            <form id="message-form" class="message-form hidden">
+              <input id="message-text" maxlength="10000" placeholder="Написать сообщение…" aria-label="Текст сообщения">
+              <button class="primary" type="submit">Отправить</button>
+            </form>
+          </div>
+        </div>
+      </section>
       <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><label class="setting"><span><strong>Тёмная тема</strong><small>Оформление интерфейса</small></span><input id="dark-theme" type="checkbox" checked></label><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div><div class="setting"><span><strong>Журнал диагностики</strong><small id="log-path">Загрузка пути…</small></span></div></div><p class="muted note">Журнал записывает переходы и ошибки без пароля и текста сообщений. Для сдачи работ открывается форма СДО в этом же окне.</p></section>
     </main>
   </div>
