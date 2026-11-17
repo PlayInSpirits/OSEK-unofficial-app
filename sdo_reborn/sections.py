@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
@@ -105,6 +106,7 @@ class StudentSections:
         self.files = files
         self.home = None
         self.calendar_html = ""
+        self.meeting_months = {}
         self.forms = ActivityForms(client)
         self.library = WebinarLibrary(client, project_content)
 
@@ -304,11 +306,61 @@ class StudentSections:
             self.calendar_html = ""
             raise SDOError("СДО не вернула сведения об этом событии")
         blocks = []
-        for key in ("formattedtime", "formattedlocation", "description"):
+        for label, key in (("Дата и время", "formattedtime"), ("Место", "formattedlocation")):
             if event.get(key):
-                content = BeautifulSoup(event[key], "html.parser")
-                blocks.append(project_content(content, "https://sdo.i-spo.ru/calendar/"))
+                value = BeautifulSoup(event[key], "html.parser").get_text(" ", strip=True)
+                blocks.append(self._event_fact(label, value.replace(" ,", ",")))
+        description = BeautifulSoup(event.get("description") or "", "html.parser")
+        if event.get("eventtype") == "bbbevents":
+            try:
+                blocks.extend(self._meeting_facts(identity, event.get("timestart")))
+            except SDOError:
+                blocks.append(self._event_fact("Сведения о встрече", "Не удалось загрузить карточку встречи из СДО."))
+        if description.get_text(strip=True).casefold() not in {"ввв событие", "bbb событие"}:
+            for link in description.select('a[href*="calendar/view.php"]'):
+                link.unwrap()
+            if description.get_text(strip=True) or description.select_one("img, video, audio"):
+                blocks.append(project_content(description, "https://sdo.i-spo.ru/calendar/"))
         return {"title": event["name"], "blocks": blocks}
+
+    @staticmethod
+    def _event_fact(label, value):
+        return {"tag": "p", "attrs": {}, "children": [
+            {"tag": "strong", "attrs": {}, "children": [label + ": "]}, value,
+        ]}
+
+    def _meeting_facts(self, identity, timestamp):
+        unavailable = self._event_fact("Сведения о встрече", "СДО не опубликовала карточку и материалы для этого занятия.")
+        if not isinstance(timestamp, int) or timestamp <= 0:
+            return [unavailable]
+        local = datetime.fromtimestamp(timestamp, timezone(timedelta(hours=3)))
+        month = local.year, local.month
+        if month not in self.meeting_months:
+            url = f"/?action=bbb_calendar&view=month&time={timestamp}"
+            soup = BeautifulSoup(self.client._get(url), "html.parser")
+            self.meeting_months[month] = {
+                link["data-event-id"]: link["href"]
+                for link in soup.select(".maincalendar a[data-event-id][href]")
+            }
+        target = self.meeting_months[month].get(identity)
+        if not target:
+            return [unavailable]
+        target = safe_url(target)
+        parsed = urlparse(target)
+        params = parse_qs(parsed.query)
+        if parsed.path != "/" or params.get("action") != ["bbb_calendar"] or not params.get("id"):
+            return [unavailable]
+        page = BeautifulSoup(self.client._get(target), "html.parser")
+        facts = []
+        for label, selector in (
+            ("Курс или организация", "#region-main .course__name"),
+            ("Преподаватель", "#region-main .teacher__name"),
+            ("Статус", "#region-main .bbb__calendar-message-block"),
+        ):
+            node = page.select_one(selector)
+            if node and node.get_text(strip=True):
+                facts.append(self._event_fact(label, node.get_text(" ", strip=True)))
+        return facts or [unavailable]
 
     def read(self, section, program="", material_url=""):
         if section == "event":

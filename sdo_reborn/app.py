@@ -16,6 +16,7 @@ from .client import SDOClient, SDOError
 from .diagnostic_log import logger, setup_logging, LOG_FILE
 from .sections import StudentSections
 from .documents import StudentFiles
+from .updates import check_preview
 
 
 SERVICE = "SDO-Reborn"
@@ -37,7 +38,7 @@ class Bridge:
         "programs", "student_section", "course_image", "pdf_page", "log_event",
         "get_log_path", "conversations", "conversation_messages", "send_message",
         "search_people", "send_to_user",
-        "recordings", "activity_pick", "activity_submit",
+        "recordings", "activity_pick", "activity_submit", "app_version", "check_for_update",
         "logout", "settings", "set_autostart",
     )
 
@@ -64,6 +65,13 @@ class Bridge:
         except Exception:
             return {"ok": False, "username": ""}
         return {"saved": bool(username and password), "username": username or ""}
+
+    def app_version(self):
+        return "v0." + resource_path("web/version.txt").read_text(encoding="ascii").strip()
+
+    def check_for_update(self):
+        installed = int(resource_path("web/version.txt").read_text(encoding="ascii").strip())
+        return check_preview(installed)
 
     def resume(self):
         logger.info("auth_resume_start")

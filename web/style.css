@@ -351,6 +351,40 @@ body.light .activity-field select, body.light .activity-form textarea, body.ligh
   flex: 1 1 180px;
   min-width: 0;
 }
+.release-footer {
+  position: fixed;
+  right: 18px;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #b3bdd8;
+  font-size: 13px;
+}
+.release-footer span, .release-footer a {
+  background: #181f32;
+  border: 1px solid #3b4566;
+  border-radius: 9px;
+  padding: 7px 10px;
+}
+.release-footer span:empty {
+  display: none;
+}
+.release-footer a {
+  color: #d5d7ff;
+  text-underline-offset: 3px;
+}
+.release-footer a:hover {
+  background: #29294e;
+}
+.light .release-footer span, .light .release-footer a {
+  background: #f5f6ff;
+  color: #373b67;
+}
+main.content {
+  padding-bottom: 64px;
+}
 @media (max-height: 760px) {
   .sidebar .brand { margin-bottom: 14px; }
   .sidebar { padding-top: 15px; }

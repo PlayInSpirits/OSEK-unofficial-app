@@ -116,6 +116,10 @@
       <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><label class="setting"><span><strong>Тёмная тема</strong><small>Оформление интерфейса</small></span><input id="dark-theme" type="checkbox" checked></label><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div><div class="setting"><span><strong>Журнал диагностики</strong><small id="log-path">Загрузка пути…</small></span></div></div><p class="muted note">Журнал записывает переходы и ошибки без пароля и текста сообщений.</p></section>
     </main>
   </div>
+  <footer class="release-footer" aria-label="Версия приложения">
+    <a id="update-link" class="hidden" target="_blank" rel="noopener">Доступна новая версия. Скачать</a>
+    <span id="app-version"></span>
+  </footer>
   <script src="app.js"></script>
 </body>
 </html>

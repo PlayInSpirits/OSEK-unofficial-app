@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+const serverLoading = 'Загружаю информацию с сервера...';
 let model = { courses: [], events: [], deadlines: [], notifications: [] };
 let currentConversation = null;
 let messagesLoaded = false;
@@ -155,7 +156,7 @@ async function showResource(section, title = '', url = '', program = '') {
   });
   $('resource-content').replaceChildren();
   $('resource-title').textContent = title || sectionTitles[section];
-  $('resource-status').textContent = 'Загружаю данные СДО…';
+  $('resource-status').textContent = serverLoading;
   const needsProgram = programSections.has(section);
   const selector = $('resource-program');
   $('resource-program-label').classList.toggle('hidden', !needsProgram);
@@ -226,7 +227,7 @@ async function renderReader() {
   const content = $('reader-content');
   content.replaceChildren();
   $('reader-title').textContent = reading.title;
-  $('reader-status').textContent = 'Идёт загрузка с СДО…';
+  $('reader-status').textContent = serverLoading;
   try {
     const api = window.pywebview.api;
     const result = reading.section === 'pdf'
@@ -679,6 +680,7 @@ async function loadAccountAvatar(version) {
   $('account-avatar').replaceChildren(image);
 }
 async function init() {
+  showReleaseStatus();
   const result = await window.pywebview.api.bootstrap();
   $('username').value = result.username || '';
   if (result.saved) {
@@ -691,6 +693,22 @@ async function init() {
   const settings = await window.pywebview.api.settings();
   $('autostart').checked = !!settings.autostart;
   $('log-path').textContent = await window.pywebview.api.get_log_path();
+}
+
+async function showReleaseStatus() {
+  const api = window.pywebview.api;
+  $('app-version').textContent = await api.app_version();
+  async function check() {
+    const result = await api.check_for_update();
+    if (!result.ok) return;
+    const link = $('update-link');
+    if (result.url) link.href = result.url;
+    else link.removeAttribute('href');
+    link.classList.toggle('hidden', !result.url);
+  }
+  const refreshPreview = () => check().catch(() => logAction('ui_error', 'preview_check_failed'));
+  refreshPreview();
+  window.setInterval(refreshPreview, 15 * 60 * 1000);
 }
 document.querySelectorAll('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
 document.querySelectorAll('[data-section]').forEach(button => {

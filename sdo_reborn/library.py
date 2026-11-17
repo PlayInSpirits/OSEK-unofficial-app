@@ -109,7 +109,4 @@ class WebinarLibrary:
         main = soup.select_one(".single-row .booklist-main")
         if not main:
             raise SDOError("Библиотека не вернула запись вебинара")
-        blocks = [self.project(main, url)]
-        for section in soup.select(".single-row .booklist-sections"):
-            blocks.append(self.project(section, url))
-        return {"blocks": blocks}
+        return {"blocks": [self.project(main, url)]}

@@ -24,6 +24,7 @@ jobs:
       - name: Build executable
         shell: pwsh
         run: |
+          Set-Content -LiteralPath 'web/version.txt' -Encoding ascii -Value '${{ github.run_number }}'
           python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx --name ОСЭК-Remastered --icon assets/icon.ico --add-data "web:web" --add-data "assets/icon.png:assets" --collect-all webview --collect-all pypdfium2 --collect-all pypdfium2_raw --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path -LiteralPath 'dist/ОСЭК-Remastered/ОСЭК-Remastered.exe')) { throw 'Executable missing' }
