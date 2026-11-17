@@ -6,7 +6,16 @@ let conversationListVersion = 0;
 let activeResource = '';
 let resourceVersion = 0;
 let topicVersion = 0;
-let materialReturn = 'assignments';
+let readerVersion = 0;
+const readerHistory = [];
+const imageObserver = new IntersectionObserver(entries => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const image = entry.target;
+    imageObserver.unobserve(image);
+    loadCourseImage(image);
+  }
+}, {rootMargin: '250px'});
 const sectionTitles = {
   documents: 'Документы и платежи',
   schedule: 'Учебный график',
@@ -30,6 +39,7 @@ const materialLabels = {
   forum: 'Форум',
 };
 let programRequest;
+let accountVersion = 0;
 const logAction = (kind, detail = '') => { const task = window.pywebview?.api?.log_event(kind, String(detail)); if (task?.catch) task.catch(() => {}); };
 
 function showMessage(text) {
@@ -44,8 +54,7 @@ function element(tag, className, text) {
 }
 function empty(parent, text) { parent.replaceChildren(element('p', 'empty', text)); }
 
-async function fillPrograms(selector) {
-  if (selector.options.length) return;
+async function getPrograms() {
   if (!programRequest) programRequest = window.pywebview.api.programs();
   const result = await programRequest;
   if (!result.ok) {
@@ -53,8 +62,14 @@ async function fillPrograms(selector) {
     throw Error(result.error);
   }
   if (!result.data.length) throw Error('В этой учётной записи нет доступных учебных программ');
+  return result.data;
+}
+
+async function fillPrograms(selector) {
   if (selector.options.length) return;
-  for (const program of result.data) {
+  const programs = await getPrograms();
+  if (selector.options.length) return;
+  for (const program of programs) {
     const option = element('option', '', program.label || 'Программа ' + program.id);
     option.value = program.id;
     option.selected = program.active;
@@ -62,40 +77,71 @@ async function fillPrograms(selector) {
   }
 }
 
-function showPage(page) {
+function showPage(page, program = '') {
   logAction('tab', page);
-  if (page !== 'resources') sessionStorage.setItem('osek-page', page);
+  if (page !== 'resources' && page !== 'reader') sessionStorage.setItem('osek-page', page);
+  if (page !== 'reader') {
+    readerHistory.length = 0;
+    ++readerVersion;
+    $('reader-content').replaceChildren();
+  }
   document.querySelectorAll('.page').forEach(node => node.classList.toggle('hidden', node.id !== 'page-' + page));
   document.querySelectorAll('.nav').forEach(node => node.classList.toggle('active', node.dataset.page === page));
-  if (page === 'curriculum') loadCurriculum();
+  document.querySelector('main.content').scrollTop = 0;
+  if (page === 'curriculum') loadCurriculum(program);
   if (page === 'messages' && !messagesLoaded) loadConversations();
+}
+
+function internalLink(title, action) {
+  const link = element('a', 'internal-link', title);
+  link.href = '#';
+  link.addEventListener('click', event => {
+    event.preventDefault();
+    action();
+  });
+  return link;
+}
+
+async function loadCourseImage(image) {
+  if (!image.isConnected) return;
+  try {
+    const result = await window.pywebview.api.course_image(image.dataset.sdoImage);
+    if (!result.ok) throw Error(result.error);
+    if (image.isConnected) image.src = result.data;
+  } catch (error) {
+    image.title = error.message;
+  }
 }
 
 function renderSourceNode(value) {
   if (typeof value === 'string') return document.createTextNode(value);
   const node = element(value.tag);
-  for (const [key, data] of Object.entries(value.attrs)) node.setAttribute(key, data);
+  for (const [key, data] of Object.entries(value.attrs)) {
+    if (key === 'href') continue;
+    if (key === 'src' && value.tag === 'img' && new URL(data).pathname.startsWith('/pluginfile.php/')) {
+      node.dataset.sdoImage = data;
+      imageObserver.observe(node);
+      continue;
+    }
+    node.setAttribute(key, data);
+  }
   if (value.tag === 'img') node.loading = 'lazy';
   if (value.tag === 'audio' || value.tag === 'video') {
     node.controls = true;
     node.preload = 'none';
   }
   if (value.tag === 'a' && value.attrs.href) {
+    node.href = '#';
     node.addEventListener('click', event => {
       event.preventDefault();
-      const url = new URL(value.attrs.href);
-      if (activeResource === 'webinars' && url.searchParams.get('action') === 'bbb_calendar') {
-        showResource('webinars', '', value.attrs.href);
-        return;
-      }
-      openMaterial(value.attrs.href, node.textContent.trim(), 'resources');
+      openMaterial(value.attrs.href, node.textContent.trim());
     });
   }
   node.append(...value.children.map(renderSourceNode));
   return node;
 }
 
-async function showResource(section, title = '', url = '') {
+async function showResource(section, title = '', url = '', program = '') {
   const version = ++resourceVersion;
   activeResource = section;
   showPage('resources');
@@ -103,7 +149,6 @@ async function showResource(section, title = '', url = '') {
   document.querySelectorAll('[data-section]').forEach(button => {
     button.classList.toggle('active', button.dataset.section === section);
   });
-  $('resource-back').classList.toggle('hidden', section !== 'material');
   $('resource-content').replaceChildren();
   $('resource-title').textContent = title || sectionTitles[section];
   $('resource-status').textContent = 'Загружаю данные СДО…';
@@ -115,34 +160,133 @@ async function showResource(section, title = '', url = '') {
       await fillPrograms(selector);
       if (version !== resourceVersion) return;
     }
+    if (needsProgram && program) selector.value = program;
     const result = await window.pywebview.api.student_section(section, needsProgram ? selector.value : '', url);
     if (version !== resourceVersion) return;
     if (!result.ok) throw Error(result.error);
     $('resource-status').textContent = '';
     if (result.data.title && !title) $('resource-title').textContent = result.data.title;
-    for (const block of result.data.blocks) {
-      const panel = element('article', 'panel resource-block');
-      panel.append(renderSourceNode(block));
-      $('resource-content').append(panel);
-    }
+    if (section === 'profile') renderProfile(result.data);
+    else if (section === 'webinars') renderWebinars(result.data);
+    else appendBlocks($('resource-content'), result.data.blocks);
   } catch (error) {
     if (version === resourceVersion) $('resource-status').textContent = error.message;
   }
 }
 
-function openMaterial(url, title, previousPage = 'assignments') {
-  const path = new URL(url).pathname;
-  if (/^\/mod\/(page|book|label|mvideo|nwresource)\//.test(path)) {
-    materialReturn = previousPage === 'resources' ? activeResource : previousPage;
-    showResource('material', title, url);
-    return;
+function appendBlocks(target, blocks) {
+  for (const block of blocks) {
+    const panel = element('article', 'panel resource-block');
+    if (block.tag === 'img') panel.classList.add('reader-book-page');
+    panel.append(renderSourceNode(block));
+    target.append(panel);
   }
-  openSite(url);
 }
-async function openSite(url) {
-  logAction('course', new URL(url).pathname);
-  const result = await window.pywebview.api.open_site(url);
-  if (!result.ok) showMessage(result.error || 'Не удалось открыть страницу');
+
+function openMaterial(url, title) {
+  const address = new URL(url);
+  const isPDF = address.pathname.endsWith('.pdf') || address.pathname === '/report/studybook/getpdf.php'
+    || (address.pathname === '/mod/gbooks/view.php' && address.searchParams.has('pdf'));
+  openReader(isPDF ? 'pdf' : 'material', title, url);
+}
+
+function openReader(section, title, url) {
+  const current = document.querySelector('.page:not(.hidden)');
+  const previous = readerHistory.at(-1);
+  if (previous) previous.scroll = document.querySelector('main.content').scrollTop;
+  readerHistory.push({
+    section, title, url,
+    returnPage: current.id.slice(5),
+    returnScroll: document.querySelector('main.content').scrollTop,
+    scroll: 0, pdfIndex: 0,
+  });
+  renderReader();
+}
+
+async function renderReader() {
+  const reading = readerHistory.at(-1);
+  const version = ++readerVersion;
+  showPage('reader');
+  const content = $('reader-content');
+  content.replaceChildren();
+  $('reader-title').textContent = reading.title;
+  $('reader-status').textContent = 'Идёт загрузка с СДО…';
+  try {
+    const api = window.pywebview.api;
+    const result = reading.section === 'pdf'
+      ? await api.pdf_page(reading.url, reading.pdfIndex)
+      : await api.student_section(reading.section, '', reading.url);
+    if (version !== readerVersion) return;
+    if (!result.ok) throw Error(result.error);
+    $('reader-status').textContent = result.data.notice || '';
+    if (result.data.title) $('reader-title').textContent = result.data.title;
+    if (reading.section === 'pdf') renderPdf(result.data, reading);
+    else if (result.data.blocks.length) appendBlocks(content, result.data.blocks);
+    else empty(content, 'СДО не вернула подробности.');
+    document.querySelector('main.content').scrollTop = reading.scroll;
+  } catch (error) {
+    if (version === readerVersion) $('reader-status').textContent = error.message;
+  }
+}
+
+function renderPdf(result, reading) {
+  const toolbar = element('div', 'pdf-toolbar');
+  for (const [label, delta] of [['← Предыдущая', -1], ['Следующая →', 1]]) {
+    const button = element('button', 'ghost', label);
+    button.disabled = reading.pdfIndex + delta < 0 || reading.pdfIndex + delta >= result.total;
+    button.onclick = () => {
+      reading.pdfIndex += delta;
+      reading.scroll = 0;
+      renderReader();
+    };
+    toolbar.append(button);
+  }
+  toolbar.append(element('span', 'muted', (reading.pdfIndex + 1) + ' / ' + result.total));
+  const image = element('img', 'pdf-page');
+  image.alt = 'Страница ' + (reading.pdfIndex + 1);
+  image.src = result.image;
+  $('reader-content').append(toolbar, image);
+}
+
+function renderWebinars(data) {
+  const parent = $('resource-content');
+  const bar = element('div', 'webinar-month');
+  bar.append(element('h2', '', data.month));
+  for (const item of data.controls) {
+    bar.append(internalLink(item.title, () => showResource('webinars', '', item.url)));
+  }
+  parent.append(bar);
+  const list = element('div', 'panel list');
+  parent.append(list);
+  const items = data.events.map(event => {
+    const day = event.date ? new Date(event.date * 1000).toLocaleDateString('ru-RU', {day: 'numeric', month: 'long', timeZone: 'Europe/Moscow'}) : '';
+    return Object.assign({}, event, {when: [day, event.time].filter(Boolean).join(' · ')});
+  });
+  renderItems(list, items, 'event');
+}
+
+function renderProfile(data) {
+  const panel = element('article', 'panel resource-block');
+  const header = element('div', 'profile-heading');
+  if (data.identity.avatar) {
+    const photo = element('img', 'profile-photo');
+    photo.src = data.identity.avatar;
+    photo.alt = '';
+    header.append(photo);
+  }
+  header.append(element('h2', '', data.identity.name || model.profile.name));
+  panel.append(header);
+  const list = element('dl', 'profile-fields');
+  for (const field of data.fields) {
+    list.append(element('dt', '', field.label), element('dd', '', field.value));
+  }
+  panel.append(list);
+  if (data.programs.length) {
+    const programs = element('ul');
+    for (const program of data.programs) programs.append(element('li', '', program.label));
+    panel.append(element('h3', '', 'Учебные программы'), programs);
+  }
+  $('resource-content').append(panel);
 }
 function renderItems(parent, items, kind) {
   parent.replaceChildren();
@@ -165,23 +309,22 @@ function renderItems(parent, items, kind) {
     const row = element('div', 'item');
     row.append(element('div', 'item-icon', kind === 'event' ? '◷' : kind === 'deadline' ? '✓' : '✦'));
     const body = element('div', 'item-body');
-    body.append(element('strong', '', item.title));
+    if (kind === 'event' && item.id) {
+      body.append(internalLink(item.title, () => openReader('event', item.title, String(item.id))));
+    } else if (item.url && kind !== 'event') {
+      body.append(internalLink(item.title, () => openMaterial(item.url, item.title)));
+    } else {
+      body.append(element('strong', '', item.title));
+    }
     const detail = item.when ? String(item.when) : item.description || '';
     if (detail) body.append(element('small', '', detail));
     row.append(body);
-    if (item.url) {
-      const button = element('button', '', 'Открыть ↗');
-      button.addEventListener('click', () => openMaterial(item.url, item.title));
-      row.append(button);
-    }
     parent.append(row);
   }
 }
 function render() {
-  $('count-courses').textContent = model.courses.length;
-  $('count-events').textContent = model.events.length;
   $('count-notifications').textContent = model.notifications.length;
-  renderItems($('home-events'), model.events.slice(0, 6), 'event');
+  $('count-notifications').classList.toggle('hidden', !model.notifications.length);
   renderItems($('calendar-list'), model.events, 'event');
   renderItems($('home-deadlines'), model.deadlines.slice(0, 6), 'deadline');
   renderItems($('notifications-list'), model.notifications, 'notification');
@@ -199,38 +342,66 @@ function render() {
   }
   if (!model.courses.length) empty(cards, 'Курсы не найдены. Нажмите «Обновить».');
 }
+
+async function renderHomePrograms() {
+  const version = accountVersion;
+  const list = $('home-programs');
+  empty(list, 'Загружаю программы…');
+  try {
+    const programs = await getPrograms();
+    if (version !== accountVersion) return;
+    list.replaceChildren();
+    for (const program of programs) {
+      const item = element('details', 'program-item');
+      item.append(element('summary', '', program.label));
+      const links = element('div', 'program-links');
+      links.append(
+        internalLink('Учебный план', () => showPage('curriculum', program.id)),
+        internalLink('Зачётная книжка', () => showResource('grades', '', '', program.id)),
+      );
+      item.append(links);
+      list.append(item);
+    }
+  } catch (error) {
+    if (version === accountVersion) empty(list, error.message);
+  }
+}
+
 async function selectCourse(course) {
   const version = ++topicVersion;
   logAction('course', course.id);
   $('assignment-heading').textContent = course.title;
-  $('open-course').classList.remove('hidden');
-  $('open-course').onclick = () => openSite(course.url);
   document.querySelectorAll('#assignment-courses button').forEach(node => node.classList.toggle('active', node.dataset.courseId == course.id));
   empty($('assignment-list'), 'Загружаю темы…');
   const result = await window.pywebview.api.topics(course.url);
   if (version !== topicVersion) return;
   if (!result.ok) { empty($('assignment-list'), result.error); return; }
-  if (!result.items.length) { empty($('assignment-list'), 'Темы не найдены. Откройте курс во встроенном окне.'); return; }
+  if (!result.items.length) { empty($('assignment-list'), 'СДО не вернула темы курса.'); return; }
   const topics = result.items.map(item => Object.assign({}, item, {description: materialLabels[item.kind] || ''}));
   renderItems($('assignment-list'), topics, 'deadline');
 }
-let curriculumLoaded = false;
-async function loadCurriculum() {
-  if (curriculumLoaded) return;
+let curriculumLoaded = '';
+let curriculumVersion = 0;
+async function loadCurriculum(selectedProgram = '') {
   const selector = $('curriculum-program');
+  if (curriculumLoaded && curriculumLoaded === (selectedProgram || selector.value)) return;
+  curriculumLoaded = '';
+  const version = ++curriculumVersion;
   const list = $('curriculum-list');
   empty(list, 'Загружаю учебный план…');
   try {
     await fillPrograms(selector);
   } catch (error) {
-    empty(list, error.message);
+    if (version === curriculumVersion) empty(list, error.message);
     return;
   }
+  if (version !== curriculumVersion) return;
+  if (selectedProgram) selector.value = selectedProgram;
   const program = selector.value;
   const result = await window.pywebview.api.curriculum(program);
-  if (program !== selector.value) return;
+  if (version !== curriculumVersion || program !== selector.value) return;
   if (!result.ok) { empty($('curriculum-list'), result.error); return; }
-  curriculumLoaded = true;
+  curriculumLoaded = program;
   list.replaceChildren();
   for (const item of result.items) {
     const card = element('button', 'course-card curriculum-card');
@@ -257,19 +428,31 @@ async function refresh() {
   model = result.data; render();
 }
 function signedIn(result) {
+  ++accountVersion;
   model = result.data;
   const name = result.data.profile?.name || result.username;
-  $('account-name').textContent = name;
+  const [surname, personal, patronymic] = name.trim().split(/\s+/);
+  const initials = [surname, patronymic].filter(Boolean).map(word => Array.from(word)[0].toUpperCase() + '.');
+  $('account-name').textContent = personal ? [personal, initials.join('')].join(' ') : name;
+  $('account-name').title = name;
   $('top-account-name').textContent = name;
-  const avatar = result.data.profile?.avatar;
-  $('account-avatar').replaceChildren();
-  if (avatar) { const img = element('img'); img.src = avatar; img.alt = ''; $('account-avatar').append(img); }
-  else $('account-avatar').textContent = name.charAt(0).toUpperCase();
+  $('account-avatar').textContent = (personal || name).charAt(0).toUpperCase();
   $('login').classList.add('hidden'); $('app').classList.remove('hidden');
   $('password').value = '';
   render();
+  renderHomePrograms();
+  loadAccountAvatar(accountVersion);
   const lastPage = sessionStorage.getItem('osek-page');
   if (lastPage && document.getElementById('page-' + lastPage)) showPage(lastPage);
+}
+
+async function loadAccountAvatar(version) {
+  const result = await window.pywebview.api.student_section('profile');
+  if (version !== accountVersion || !result.ok || !result.data.identity.avatar) return;
+  const image = element('img');
+  image.src = result.data.identity.avatar;
+  image.alt = '';
+  $('account-avatar').replaceChildren(image);
 }
 async function init() {
   const result = await window.pywebview.api.bootstrap();
@@ -291,12 +474,19 @@ document.querySelectorAll('[data-section]').forEach(button => {
 });
 $('resource-program').addEventListener('change', () => showResource(activeResource));
 $('curriculum-program').addEventListener('change', () => {
-  curriculumLoaded = false;
   loadCurriculum();
 });
-$('resource-back').addEventListener('click', () => {
-  if (materialReturn === 'assignments') showPage('assignments');
-  else if (sectionTitles[materialReturn]) showResource(materialReturn);
+$('reader-back').addEventListener('click', () => {
+  const reading = readerHistory.pop();
+  if (readerHistory.length) {
+    renderReader();
+  } else {
+    showPage(reading.returnPage);
+    if (reading.returnPage === 'resources') {
+      document.querySelector(`[data-section="${activeResource}"]`)?.classList.add('active');
+    }
+    document.querySelector('main.content').scrollTop = reading.returnScroll;
+  }
 });
 $('login-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -311,6 +501,8 @@ $('logout').addEventListener('click', async () => {
   ++resourceVersion;
   ++topicVersion;
   ++conversationListVersion;
+  ++curriculumVersion;
+  ++accountVersion;
   programRequest = null;
   $('curriculum-program').replaceChildren();
   $('resource-program').replaceChildren();
@@ -324,7 +516,7 @@ $('logout').addEventListener('click', async () => {
   $('conversation-title').textContent = 'Выберите переписку';
   currentConversation = null;
   messagesLoaded = false;
-  curriculumLoaded = false;
+  curriculumLoaded = '';
   showPage('home');
   $('app').classList.add('hidden');
   $('login').classList.remove('hidden');

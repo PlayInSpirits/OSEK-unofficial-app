@@ -1,5 +1,6 @@
 """Read the student-facing sections without running the site's JavaScript."""
 
+import re
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -16,7 +17,7 @@ PROGRAM_ACTIONS = {
 }
 SECTION_SELECTORS = {
     "documents": "#frontpage-available-course-list .table-responsive",
-    "schedule": "#frontpage-available-course-list .programs_schedule",
+    "schedule": "#frontpage-available-course-list .programs_schedule table",
     "grades": "#frontpage-available-course-list .esd_page",
     "official": "#frontpage-available-course-list",
     "webinars": ".maincalendar",
@@ -36,6 +37,8 @@ IGNORED_TAGS = {
     "iframe", "object", "embed", "svg", "select", "textarea",
 }
 MEDIA_HOSTS = {"sdo.i-spo.ru", "media2.sdo.support"}
+SCHEDULE_STYLES = {"backwhite", "backgray"}
+INLINE_IMAGE = re.compile(r"data:image/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\r\n]+")
 
 
 def project_content(node, base):
@@ -64,7 +67,10 @@ def project_content(node, base):
             src = urljoin(base, node["src"])
             parsed = urlparse(src)
             if node.name == "img":
-                attrs["src"] = safe_url(src)
+                if len(src) <= 8_000_000 and INLINE_IMAGE.fullmatch(src):
+                    attrs["src"] = src
+                else:
+                    attrs["src"] = safe_url(src)
             elif parsed.scheme == "https" and parsed.hostname in MEDIA_HOSTS and parsed.port is None:
                 attrs["src"] = src
             else:
@@ -78,13 +84,20 @@ def project_content(node, base):
             value = node.get(attr, "")
             if value.isdecimal() and 1 < int(value) <= 100:
                 attrs[attr] = value
+    if node.name == "table" and "schedule" in node.get("class", []):
+        attrs["class"] = "schedule-grid"
+    schedule_classes = SCHEDULE_STYLES.intersection(node.get("class", []))
+    if schedule_classes:
+        attrs["class"] = " ".join(sorted(schedule_classes))
     return {"tag": node.name, "attrs": attrs, "children": children}
 
 
 class StudentSections:
-    def __init__(self, client):
+    def __init__(self, client, files=None):
         self.client = client
+        self.files = files
         self.home = None
+        self.calendar_html = ""
 
     def _home(self):
         if self.home is None:
@@ -123,6 +136,17 @@ class StudentSections:
         return safe_url(link["href"])
 
     def _material_blocks(self, soup, url):
+        if urlparse(url).path == "/mod/gbooks/view.php":
+            book = soup.select_one("#wowbook")
+            pages = book.select('img[src*="/mod_gbooks/pages/"]') if book else []
+            if not pages:
+                raise SDOError("СДО не вернула страницы электронной книги")
+            for number, image in enumerate(pages, 1):
+                image["alt"] = f"Страница {number}"
+            pdf = book.select_one('a[href*="pdf="]')
+            blocks = [project_content(pdf, url)] if pdf and pdf.get_text(strip=True) else []
+            blocks.extend(project_content(image, url) for image in pages)
+            return blocks
         blocks = soup.select(SECTION_SELECTORS["material"])
         blocks = [block for block in blocks if not block.find_parent(attrs={"role": "main"})]
         result = []
@@ -132,6 +156,9 @@ class StudentSections:
                 src = safe_url(urljoin(url, frame["src"]))
                 if not urlparse(src).path.startswith("/pluginfile.php/"):
                     raise SDOError("СДО вернула неизвестный адрес файла материала")
+                if urlparse(src).path.lower().endswith(".pdf"):
+                    result.append({"tag": "a", "attrs": {"href": src}, "children": ["Просмотреть PDF"]})
+                    continue
                 response = self.client._request("GET", src)
                 mime = response.headers.get("Content-Type", "").split(";")[0].strip()
                 if mime != "text/html" or urlparse(response.url).path == "/login/index.php":
@@ -146,7 +173,74 @@ class StudentSections:
             raise SDOError("СДО не вернула содержимое учебного материала")
         return result
 
+    def _profile(self, soup, url):
+        account = self.client.profile(str(soup))
+        photo = soup.select_one(".userprofile img.userpicture[src]")
+        account["avatar"] = ""
+        if photo and self.files:
+            try:
+                account["avatar"] = self.files.image(urljoin(url, photo["src"]))
+            except SDOError:
+                account["avatar"] = ""
+        fields = {}
+        labels = soup.select(".userprofile .profile-properties-label")
+        values = soup.select(".userprofile .profile-properties-content")
+        for label, value in zip(labels, values):
+            fields.setdefault(label.get_text(" ", strip=True).rstrip(":"), value.get_text(" ", strip=True))
+        return {
+            "blocks": [], "identity": account,
+            "fields": [{"label": key, "value": val} for key, val in fields.items() if key and val],
+            "programs": self.programs(),
+        }
+
+    def _webinars(self, soup, url):
+        calendar = soup.select_one(".maincalendar")
+        if not calendar:
+            raise SDOError("СДО не вернула календарь вебинаров")
+        month = calendar.select_one(".calendar-controls h2")
+        controls = []
+        for key, label in (("previous", "← Предыдущий месяц"), ("next", "Следующий месяц →")):
+            link = calendar.select_one(f".calendar-controls a.{key}[href]")
+            if link:
+                controls.append({"title": label, "url": safe_url(urljoin(url, link["href"]))})
+        events = {}
+        for link in calendar.select("a[data-event-id]"):
+            identity = link["data-event-id"]
+            day = link.find_parent("td")
+            if not identity.isdecimal() or not day or identity in events:
+                continue
+            date = day.get("data-day-timestamp", "")
+            time = link.parent.get_text(" ", strip=True).split(" ", 1)[0]
+            events[identity] = {
+                "id": identity, "title": link.get_text(" ", strip=True),
+                "date": int(date) if date.isdecimal() else None,
+                "time": time if len(time) == 5 and time[2] == ":" else "",
+            }
+        return {
+            "blocks": [], "month": month.get_text(" ", strip=True) if month else "",
+            "controls": controls, "events": list(events.values()),
+        }
+
+    def _event(self, identity):
+        if not isinstance(identity, str) or not identity.isdecimal():
+            raise SDOError("СДО не указала идентификатор события")
+        if not self.calendar_html:
+            self.calendar_html = self.client._get("/calendar/view.php?view=upcoming")
+        data = self.client._ajax(self.calendar_html, "core_calendar_get_calendar_event_by_id", {"eventid": int(identity)})
+        event = data.get("event") if isinstance(data, dict) else None
+        if not event:
+            self.calendar_html = ""
+            raise SDOError("СДО не вернула сведения об этом событии")
+        blocks = []
+        for key in ("formattedtime", "formattedlocation", "description"):
+            if event.get(key):
+                content = BeautifulSoup(event[key], "html.parser")
+                blocks.append(project_content(content, "https://sdo.i-spo.ru/calendar/"))
+        return {"title": event["name"], "blocks": blocks}
+
     def read(self, section, program="", material_url=""):
+        if section == "event":
+            return self._event(material_url)
         if section not in SECTION_SELECTORS:
             raise SDOError("Неизвестный раздел")
         if section in {"material", "webinars"} and material_url:
@@ -161,19 +255,32 @@ class StudentSections:
             if parsed.path != "/" or query.get("action") != ["bbb_calendar"] or set(query) - {"action", "time", "view"}:
                 raise SDOError("Некорректная ссылка календаря вебинаров")
         soup = BeautifulSoup(self.client._get(url), "html.parser")
+        if section == "profile":
+            return self._profile(soup, url)
+        if section == "webinars":
+            return self._webinars(soup, url)
         if section == "material":
             title = soup.select_one("#page-header h1")
+            module = parsed.path.split("/")[2]
+            interactive_form = module in {"quiz", "assign", "assignpractice", "forum", "askquest"}
             return {
                 "title": title.get_text(" ", strip=True) if title else "",
                 "blocks": self._material_blocks(soup, url),
+                "notice": "Этот экран показывает материалы. Отправка через форму СДО пока недоступна." if interactive_form else "",
             }
         blocks = soup.select(SECTION_SELECTORS[section])
-        if section == "webinars":
-            for link in soup.select(".calendar-controls a[href]"):
-                if not link.get_text(strip=True):
-                    description = link.get("title") or link.get("aria-label")
-                    if description:
-                        link.append(description)
+        if section == "documents":
+            for block in blocks:
+                for table in block.select("table"):
+                    header = table.select_one("thead tr")
+                    if not header:
+                        continue
+                    names = [cell.get_text(" ", strip=True) for cell in header.find_all(["th", "td"], recursive=False)]
+                    if "Квитанции" in names and "Статус оплаты" in names:
+                        keep = names.index("Статус оплаты") + 1
+                        for row in table.select("tr"):
+                            for cell in row.find_all(["td", "th"], recursive=False)[keep:]:
+                                cell.decompose()
         if not blocks:
             raise SDOError("СДО не вернула содержимое этого раздела")
         return {

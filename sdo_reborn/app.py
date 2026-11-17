@@ -1,23 +1,21 @@
-"""Desktop shell. The Moodle assignment form remains the original site inside the app."""
+"""Desktop shell for the local student interface."""
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import threading
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import keyring
 import webview
 from PIL import Image
 
-from .client import BASE, SDOClient, SDOError, safe_url
+from .client import SDOClient, SDOError
 from .diagnostic_log import logger, setup_logging, LOG_FILE
 from .sections import StudentSections
-from .webview_compat import install_requirejs_compatibility
+from .documents import StudentFiles
 
 
 SERVICE = "SDO-Reborn"
@@ -36,7 +34,7 @@ def icon_image() -> Image.Image:
 class Bridge:
     PUBLIC_METHODS = (
         "bootstrap", "resume", "login", "refresh", "topics", "curriculum",
-        "programs", "student_section", "open_site", "back_to_app", "log_event",
+        "programs", "student_section", "course_image", "pdf_page", "log_event",
         "get_log_path", "conversations", "conversation_messages", "send_message",
         "search_people", "send_to_user",
         "logout", "settings", "set_autostart",
@@ -44,17 +42,13 @@ class Bridge:
 
     def __dir__(self):
         # Avoid recursive inspection of WebView2's COM objects by pywebview.
-        if self.site_target:
-            return ["back_to_app"]
         return list(self.PUBLIC_METHODS)
 
     def __init__(self):
         self.client = SDOClient()
-        self.student_sections = StudentSections(self.client)
+        self.files = StudentFiles(self.client)
+        self.student_sections = StudentSections(self.client, self.files)
         self.window = None
-        self.site_target = ""
-        self.site_login_pending = False
-        self._content_owner = None
         self.cached_data = None
         self._lock = threading.RLock()
         self._tray = None
@@ -97,6 +91,8 @@ class Bridge:
         try:
             with self._lock:
                 self.client.login(username, password)
+                self.files = StudentFiles(self.client)
+                self.student_sections = StudentSections(self.client, self.files)
                 keyring.set_password(SERVICE, username.strip(), password)
                 keyring.set_password(SERVICE, "__last_user__", username.strip())
                 data = self.client.dashboard()
@@ -158,11 +154,17 @@ class Bridge:
     def student_section(self, section, program="", material_url=""):
         section_name = section if section in {
             "documents", "schedule", "grades", "official", "webinars", "news",
-            "profile", "material",
+            "profile", "material", "event",
         } else "unknown"
         return self._section_operation(
             section_name, self.student_sections.read, section, program, material_url
         )
+
+    def course_image(self, url):
+        return self._section_operation("image", self.files.image, url)
+
+    def pdf_page(self, url, index):
+        return self._section_operation("pdf", self.files.pdf_page, url, index)
 
     def _section_operation(self, name, operation, *arguments):
         started = time.monotonic()
@@ -180,41 +182,6 @@ class Bridge:
         except Exception as error:
             logger.error("section_failed section=%s type=%s", name, type(error).__name__)
             return {"ok": False, "error": "Не удалось прочитать ответ СДО"}
-
-    def open_site(self, url: str):
-        try:
-            url = safe_url(url)
-            parsed = urlparse(url)
-            query = parse_qs(parsed.query)
-            if parsed.path == "/" and query.get("action", [""])[0] in {"kug", "docs", "notice_official"} and "pid" not in query:
-                courses = (self.cached_data or {}).get("courses", [])
-                for course in courses:
-                    candidate = parse_qs(urlparse(course.get("url", "")).query).get("pid", [""])[0]
-                    if candidate.isdecimal():
-                        query["pid"] = [candidate]
-                        url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
-                        break
-                if "pid" not in query:
-                    raise SDOError("Не найдена учебная программа для этого раздела")
-            if not self.client.username:
-                raise SDOError("Сначала войдите в СДО")
-            if self._content_owner != self.client.username:
-                self.window.clear_cookies()
-                self._content_owner = self.client.username
-            self.site_target = url
-            self.site_login_pending = False
-            logger.info("content_open path=%s", urlparse(url).path)
-            self.window.load_url(url)
-            return {"ok": True}
-        except SDOError as error:
-            logger.warning("content_open_failed")
-            return {"ok": False, "error": str(error)}
-
-    def back_to_app(self):
-        logger.info("content_back_to_app")
-        self.site_target = ""
-        self.window.load_url(str(resource_path("web/index.html")))
-        return {"ok": True}
 
     def log_event(self, kind: str, detail: str = ""):
         if kind in {"tab", "course", "notification", "message_open", "message_send", "ui_error", "button"}:
@@ -260,38 +227,6 @@ class Bridge:
             logger.warning("message_send_failed type=%s", type(error).__name__)
             return {"ok": False, "error": str(error) if isinstance(error, SDOError) else "Не удалось отправить сообщение"}
 
-    def _site_loaded(self):
-        """Sign the site window in using the credential stored on this PC, then navigate."""
-        try:
-            current = self.window.evaluate_js("window.location.href")
-            if not current or not current.startswith(BASE + "/"):
-                return
-            logger.info("content_loaded path=%s", urlparse(current).path)
-            if "/login/index.php" in current:
-                if self.site_login_pending:
-                    return
-                username = self.client.username
-                password = keyring.get_password(SERVICE, username) if username else None
-                if not username or not password:
-                    return
-                script = """(function(){
-                  const u=document.querySelector('input[name="username"]');
-                  const p=document.querySelector('input[name="password"]');
-                  if(!u||!p||!u.form)return false;
-                  u.value=%s; p.value=%s; u.form.submit(); return true;
-                })()""" % (json.dumps(username), json.dumps(password))
-                self.site_login_pending = bool(self.window.evaluate_js(script))
-                return
-            resume_target = self.site_login_pending and self.site_target and self.site_target != current
-            self.site_login_pending = False
-            if resume_target:
-                self.window.load_url(self.site_target)
-                return
-            self.window.evaluate_js("""(function(){if(document.getElementById('osek-return'))return;const b=document.createElement('button');b.id='osek-return';b.textContent='← Вернуться в ОСЭК-Remastered';b.style.cssText='position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#696cf5;color:white;border:0;border-radius:12px;padding:13px 18px;font:600 14px Segoe UI;box-shadow:0 4px 18px #0005;cursor:pointer';b.onclick=()=>window.pywebview.api.back_to_app();document.body.appendChild(b)})()""")
-        except Exception:
-            logger.error("content_load_error")
-            self.site_login_pending = False
-
     def logout(self):
         logger.info("auth_logout")
         username = keyring.get_password(SERVICE, "__last_user__")
@@ -304,10 +239,10 @@ class Bridge:
         with self._lock:
             self.client.close()
             self.client = SDOClient()
-            self.student_sections = StudentSections(self.client)
+            self.files = StudentFiles(self.client)
+            self.student_sections = StudentSections(self.client, self.files)
             self.cached_data = None
         self.window.clear_cookies()
-        self._content_owner = None
         return {"ok": True}
 
     def settings(self):
@@ -394,7 +329,6 @@ class Bridge:
 
 def main():
     setup_logging()
-    install_requirejs_compatibility()
     # Each running copy must serve its own UI assets, including when an older copy is in the tray.
     webview.settings["DEFAULT_HTTP_PORT"] = 0
     bridge = Bridge()
@@ -404,7 +338,6 @@ def main():
     )
     bridge.window = window
     window.events.closing += bridge._closing
-    window.events.loaded += bridge._site_loaded
 
     def startup():
         bridge._start_tray()

@@ -12,8 +12,8 @@
   <div id="login" class="login-screen">
     <div class="login-card">
       <img class="app-icon" src="icon.png" alt="ОСЭК">
-      <p class="eyebrow">КОЛЛЕДЖ · УЧЁБА</p>
-      <h1>Ваш день в одном месте.</h1>
+      <p class="eyebrow">Колледж - ОСЭК</p>
+      <h1>Ваши знания в одном месте.</h1>
       <p class="muted">Пароль хранится локально на вашем компьютере в диспетчере учётных данных Windows.</p>
       <div id="resume-state" class="resume-state hidden"><span class="spinner"></span><span>Подключаюсь к sdo.i-spo.ru</span></div>
       <form id="login-form">
@@ -48,16 +48,21 @@
       <div class="sidebar-bottom">
         <button class="nav" data-section="profile"><span>◍</span> Профиль</button>
         <button class="nav" data-page="settings"><span>⚙</span> Настройки</button>
-        <div class="account"><div id="account-avatar" class="avatar">У</div><div><strong id="account-name">Студент</strong><small>Неофициальное приложение ОСЭК</small></div></div>
+        <div class="account"><div id="account-avatar" class="avatar">У</div><div><strong id="account-name">Студент</strong><small>Неофициальные клиент ОСЭК</small></div></div>
       </div>
     </aside>
     <main class="content">
-      <header class="topbar"><span class="pill"><span class="dot"></span> <span id="top-account-name">Учётная запись</span></span><div><button id="refresh" class="ghost">↻ Обновить</button></div></header>
+      <header class="topbar"><span class="pill"><span class="dot"></span> <span id="top-account-name">Учётная запись</span></span><div class="topbar-actions">
+        <button type="button" class="ghost quick-icon" data-page="notifications" aria-label="Уведомления" title="Уведомления">♧<span id="count-notifications" class="quick-count hidden"></span></button>
+        <button type="button" class="ghost quick-icon" data-page="messages" aria-label="Сообщения" title="Сообщения">✉</button>
+        <button id="refresh" class="ghost">↻ Обновить</button></div></header>
       <div id="message" class="message hidden" role="status"></div>
       <section id="page-home" class="page">
         <div class="hero"><div><p class="eyebrow">ВАША УЧЁБА</p><h1>Добро пожаловать<span class="accent">.</span></h1><p>Занятия, сроки и важные события — под рукой.</p></div><div class="hero-art"><span>✦</span></div></div>
-        <div class="stats"><div class="stat"><small>КУРСЫ</small><strong id="count-courses">—</strong></div><div class="stat"><small>БЛИЖАЙШИЕ СОБЫТИЯ</small><strong id="count-events">—</strong></div><div class="stat"><small>УВЕДОМЛЕНИЯ</small><strong id="count-notifications">—</strong></div></div>
-        <div class="grid-two"><div class="panel"><div class="panel-head"><div><p class="eyebrow">РАСПИСАНИЕ</p><h2>Ближайшие события</h2></div><button class="text-link" data-page="courses">Курсы →</button></div><div id="home-events" class="list"></div></div><div class="panel"><div class="panel-head"><div><p class="eyebrow">НЕ ПРОПУСТИТЕ</p><h2>Сроки заданий</h2></div></div><div id="home-deadlines" class="list"></div></div></div>
+        <div class="grid-two home-grid"><div class="panel">
+          <div class="panel-head"><h2>Мои программы</h2><button class="text-link" data-page="curriculum">Учебный план →</button></div>
+          <div id="home-programs"></div>
+        </div><div class="panel"><div class="panel-head"><div><p class="eyebrow">НЕ ПРОПУСТИТЕ</p><h2>Сроки заданий</h2></div></div><div id="home-deadlines" class="list"></div></div></div>
       </section>
       <section id="page-courses" class="page hidden"><div class="heading"><p class="eyebrow">ОБУЧЕНИЕ</p><h1>Ваши курсы</h1><p class="muted">Откройте курс, чтобы увидеть все доступные темы и материалы.</p></div><div id="courses-list" class="course-grid"></div></section>
       <section id="page-curriculum" class="page hidden">
@@ -67,7 +72,7 @@
         </div>
         <div id="curriculum-list" class="course-grid"></div>
       </section>
-      <section id="page-assignments" class="page hidden"><div class="heading"><p class="eyebrow">МАТЕРИАЛЫ КУРСА</p><h1>Темы и работы</h1><p class="muted">Выберите курс. Материалы откроются в этом же окне; кнопка возврата вернёт вас к списку.</p></div><div class="assignment-layout"><div id="assignment-courses" class="course-picker"></div><div class="panel"><div class="panel-head"><h2 id="assignment-heading">Выберите курс</h2><button id="open-course" class="ghost hidden">Материалы курса</button></div><div id="assignment-list" class="list"><p class="empty">Темы появятся здесь.</p></div></div></div></section>
+      <section id="page-assignments" class="page hidden"><div class="heading"><p class="eyebrow">МАТЕРИАЛЫ КУРСА</p><h1>Темы и работы</h1><p class="muted">Выберите курс. Материалы откроются в этом же окне; кнопка возврата вернёт вас к списку.</p></div><div class="assignment-layout"><div id="assignment-courses" class="course-picker"></div><div class="panel"><div class="panel-head"><h2 id="assignment-heading">Выберите курс</h2></div><div id="assignment-list" class="list"><p class="empty">Темы появятся здесь.</p></div></div></div></section>
       <section id="page-notifications" class="page hidden"><div class="heading"><p class="eyebrow">НОВОЕ</p><h1>Уведомления</h1><p class="muted">Последние сообщения системы.</p></div><div class="panel"><div id="notifications-list" class="list"></div></div></section>
       <section id="page-calendar" class="page hidden">
         <div class="heading"><h1>Календарь</h1><p class="muted">Ближайшие события из СДО.</p></div>
@@ -75,11 +80,17 @@
       </section>
       <section id="page-resources" class="page hidden">
         <div class="heading resource-heading">
-          <div><button id="resource-back" class="ghost hidden" type="button">← Назад</button><h1 id="resource-title"></h1></div>
+          <div><h1 id="resource-title"></h1></div>
           <label id="resource-program-label" class="hidden">Учебная программа <select id="resource-program"></select></label>
         </div>
         <p id="resource-status" class="muted" role="status"></p>
         <div id="resource-content" class="resource-content"></div>
+      </section>
+      <section id="page-reader" class="page reader hidden">
+        <button id="reader-back" type="button" class="ghost">← Назад</button>
+        <h1 id="reader-title"></h1>
+        <p id="reader-status" class="muted" role="status"></p>
+        <div id="reader-content" class="resource-content"></div>
       </section>
       <section id="page-messages" class="page hidden">
         <div class="heading"><h1>Сообщения</h1></div>
@@ -102,7 +113,7 @@
           </div>
         </div>
       </section>
-      <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><label class="setting"><span><strong>Тёмная тема</strong><small>Оформление интерфейса</small></span><input id="dark-theme" type="checkbox" checked></label><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div><div class="setting"><span><strong>Журнал диагностики</strong><small id="log-path">Загрузка пути…</small></span></div></div><p class="muted note">Журнал записывает переходы и ошибки без пароля и текста сообщений. Для сдачи работ открывается форма СДО в этом же окне.</p></section>
+      <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><label class="setting"><span><strong>Тёмная тема</strong><small>Оформление интерфейса</small></span><input id="dark-theme" type="checkbox" checked></label><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div><div class="setting"><span><strong>Журнал диагностики</strong><small id="log-path">Загрузка пути…</small></span></div></div><p class="muted note">Журнал записывает переходы и ошибки без пароля и текста сообщений.</p></section>
     </main>
   </div>
   <script src="app.js"></script>

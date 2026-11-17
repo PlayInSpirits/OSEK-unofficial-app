@@ -36,6 +36,7 @@ class Event:
     description: str
     url: str
     kind: str
+    id: str = ""
 
 
 @dataclass
@@ -47,7 +48,7 @@ class Assignment:
 def safe_url(value: str) -> str:
     url = urljoin(BASE + "/", value)
     parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname != HOST or parsed.port is not None:
+    if parsed.scheme != "https" or parsed.hostname != HOST or parsed.port is not None or parsed.username is not None:
         raise SDOError("Ссылка ведёт за пределы СДО")
     return url
 
@@ -64,7 +65,7 @@ class SDOClient:
         self._password = None
         self.session.close()
 
-    def _request(self, method: str, path: str, *, data=None, json=None) -> requests.Response:
+    def _request(self, method: str, path: str, *, data=None, json=None, stream=False) -> requests.Response:
         url = safe_url(path)
         for _ in range(6):
             elapsed = time.monotonic() - self._last_request
@@ -73,7 +74,7 @@ class SDOClient:
             try:
                 started = time.monotonic()
                 response = self.session.request(
-                    method, url, data=data, json=json, timeout=20, allow_redirects=False
+                    method, url, data=data, json=json, timeout=20, allow_redirects=False, stream=stream
                 )
             except requests.RequestException as error:
                 logger.warning("sdo_request_failed method=%s type=%s", method, type(error).__name__)
@@ -85,11 +86,13 @@ class SDOClient:
             self._last_request = time.monotonic()
             if response.is_redirect:
                 location = response.headers.get("Location", "")
-                url = safe_url(location)
+                response.close()
+                url = safe_url(urljoin(url, location))
                 if response.status_code in (301, 302, 303) and method.upper() == "POST":
                     method, data, json = "GET", None, None
                 continue
             if response.status_code >= 400:
+                response.close()
                 raise SDOError(f"СДО вернула ошибку HTTP {response.status_code}")
             return response
         raise SDOError("Слишком много перенаправлений СДО")
@@ -338,7 +341,10 @@ class SDOClient:
             if url in seen:
                 continue
             seen.add(url)
-            title = link.get_text(" ", strip=True) or link.get("title") or ""
+            title = " ".join(
+                part.strip() for part in link.strings
+                if part.strip() and not part.find_parent(class_="accesshide")
+            ) or link.get("title") or ""
             if not title:
                 parent = link.find_parent(class_="activity")
                 title = parent.get_text(" ", strip=True)[:120] if parent else ""
@@ -422,5 +428,6 @@ def parse_events(html: str) -> list[Event]:
             description.get_text(" ", strip=True) if description else "",
             url,
             element.get("data-event-eventtype", ""),
+            element.get("data-event-id", ""),
         ))
     return result
