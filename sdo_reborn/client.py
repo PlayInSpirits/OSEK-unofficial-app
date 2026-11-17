@@ -10,6 +10,8 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 import requests
 from bs4 import BeautifulSoup
 
+from .diagnostic_log import logger
+
 
 BASE = "https://sdo.i-spo.ru"
 HOST = "sdo.i-spo.ru"
@@ -69,11 +71,17 @@ class SDOClient:
             if elapsed < 0.5:
                 time.sleep(0.5 - elapsed)
             try:
+                started = time.monotonic()
                 response = self.session.request(
                     method, url, data=data, json=json, timeout=20, allow_redirects=False
                 )
-            except requests.RequestException:
+            except requests.RequestException as error:
+                logger.warning("sdo_request_failed method=%s type=%s", method, type(error).__name__)
                 raise SDOError("Не удалось связаться с СДО") from None
+            logger.info(
+                "sdo_response method=%s status=%d ms=%d",
+                method, response.status_code, (time.monotonic() - started) * 1000,
+            )
             self._last_request = time.monotonic()
             if response.is_redirect:
                 location = response.headers.get("Location", "")
@@ -178,15 +186,9 @@ class SDOClient:
         if not isinstance(data, list) or not data:
             raise SDOError("СДО не подтвердила отправку сообщения")
 
-    def curriculum(self) -> list[dict]:
-        home = BeautifulSoup(self._get("/"), "html.parser")
-        program = home.select_one('a[href*="?pid="]')
-        if not program:
-            return []
-        params = parse_qs(urlparse(safe_url(program.get("href", ""))).query)
-        pid = params.get("pid", [""])[0]
+    def curriculum(self, pid: str) -> list[dict]:
         if not pid.isdecimal():
-            return []
+            raise SDOError("Некорректная учебная программа")
         soup = BeautifulSoup(self._get(f"/?pid={pid}"), "html.parser")
         result = []
         for card in soup.select(".columnGrid"):
@@ -196,11 +198,19 @@ class SDOClient:
             teacher = card.select_one(".course-teacher-plan-name")
             hours = card.select_one(".time-span")
             control = card.select_one(".control-div")
+            grade = card.select_one(".rate-span")
             try:
                 url = safe_url(link.get("href", ""))
             except SDOError:
                 continue
-            result.append({"title": link.get_text(" ", strip=True), "teacher": teacher.get_text(" ", strip=True) if teacher else "", "hours": hours.get_text(" ", strip=True) if hours else "", "control": control.get_text(" ", strip=True) if control else "", "url": url})
+            result.append({
+                "title": link.get_text(" ", strip=True),
+                "teacher": teacher.get_text(" ", strip=True) if teacher else "",
+                "hours": hours.get_text(" ", strip=True) if hours else "",
+                "control": control.get_text(" ", strip=True) if control else "",
+                "grade": grade.get_text(" ", strip=True) if grade else "",
+                "url": url,
+            })
         return result
 
     def _ajax(self, page_html: str, method: str, args: dict):
@@ -216,7 +226,7 @@ class SDOClient:
             if isinstance(result, list) and result and not result[0].get("error"):
                 return result[0].get("data")
         except (SDOError, ValueError, KeyError, TypeError):
-            pass
+            return None
         return None
 
     def deadlines(self, my_html: str) -> list[dict]:
@@ -262,7 +272,14 @@ class SDOClient:
                 url = safe_url(url)
             except SDOError:
                 url = BASE + "/message/output/popup/notifications.php"
-            result.append({"title": subject, "time": item.get("timecreated"), "url": url})
+            body = BeautifulSoup(
+                str(item.get("fullmessagehtml") or item.get("fullmessage") or ""),
+                "html.parser",
+            ).get_text("\n", strip=True)
+            result.append({
+                "title": subject, "time": item.get("timecreated"),
+                "url": url, "body": body,
+            })
         return result
 
     def topics(self, course_url: str) -> list[dict]:
@@ -270,14 +287,16 @@ class SDOClient:
         if parsed.path != "/course/view.php" or not parse_qs(parsed.query).get("id"):
             raise SDOError("Некорректная ссылка на курс")
         soup = BeautifulSoup(self._get(course_url), "html.parser")
+        course = soup.select_one("#region-main .course-content")
+        if not course:
+            raise SDOError("СДО не вернула список тем этого курса")
         result = []
         seen = set()
-        for link in soup.select('.sectionname, a[href*="/mod/"]'):
+        for link in course.select('.sectionname, a[href*="/mod/"]'):
             if "sectionname" in link.get("class", []):
                 title = link.get_text(" ", strip=True)
-                section = link.find_parent(class_="section")
-                if title and section and section.get("id"):
-                    result.append({"title": title, "url": safe_url(course_url) + "#" + section["id"], "kind": "раздел"})
+                if title:
+                    result.append({"title": title, "url": "", "kind": "раздел"})
                 continue
             try:
                 url = safe_url(link.get("href", ""))

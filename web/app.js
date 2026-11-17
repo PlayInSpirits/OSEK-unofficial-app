@@ -2,6 +2,33 @@ const $ = (id) => document.getElementById(id);
 let model = { courses: [], events: [], deadlines: [], notifications: [] };
 let currentConversation = null;
 let messagesLoaded = false;
+let activeResource = '';
+let resourceVersion = 0;
+let topicVersion = 0;
+let materialReturn = 'assignments';
+const sectionTitles = {
+  documents: 'Документы и платежи',
+  schedule: 'Учебный график',
+  grades: 'Зачётная книжка',
+  official: 'Официальные уведомления',
+  webinars: 'Вебинары',
+  news: 'Новости',
+  profile: 'Профиль',
+  material: 'Учебный материал',
+};
+const programSections = new Set(['documents', 'schedule', 'grades', 'official']);
+const materialLabels = {
+  mvideo: 'Видео',
+  nwresource: 'Материал',
+  page: 'Страница',
+  book: 'Книга',
+  gbooks: 'Книга',
+  quiz: 'Тест',
+  assign: 'Задание',
+  assignpractice: 'Практическое задание',
+  forum: 'Форум',
+};
+let programRequest;
 const logAction = (kind, detail = '') => { const task = window.pywebview?.api?.log_event(kind, String(detail)); if (task?.catch) task.catch(() => {}); };
 
 function showMessage(text) {
@@ -15,13 +42,101 @@ function element(tag, className, text) {
   return node;
 }
 function empty(parent, text) { parent.replaceChildren(element('p', 'empty', text)); }
+
+async function fillPrograms(selector) {
+  if (selector.options.length) return;
+  if (!programRequest) programRequest = window.pywebview.api.programs();
+  const result = await programRequest;
+  if (!result.ok) {
+    programRequest = null;
+    throw Error(result.error);
+  }
+  if (!result.data.length) throw Error('В этой учётной записи нет доступных учебных программ');
+  if (selector.options.length) return;
+  for (const program of result.data) {
+    const option = element('option', '', program.label || 'Программа ' + program.id);
+    option.value = program.id;
+    option.selected = program.active;
+    selector.append(option);
+  }
+}
+
 function showPage(page) {
   logAction('tab', page);
-  sessionStorage.setItem('osek-page', page);
+  if (page !== 'resources') sessionStorage.setItem('osek-page', page);
   document.querySelectorAll('.page').forEach(node => node.classList.toggle('hidden', node.id !== 'page-' + page));
   document.querySelectorAll('.nav').forEach(node => node.classList.toggle('active', node.dataset.page === page));
   if (page === 'curriculum') loadCurriculum();
   if (page === 'messages' && !messagesLoaded) loadConversations();
+}
+
+function renderSourceNode(value) {
+  if (typeof value === 'string') return document.createTextNode(value);
+  const node = element(value.tag);
+  for (const [key, data] of Object.entries(value.attrs)) node.setAttribute(key, data);
+  if (value.tag === 'img') node.loading = 'lazy';
+  if (value.tag === 'audio' || value.tag === 'video') {
+    node.controls = true;
+    node.preload = 'none';
+  }
+  if (value.tag === 'a' && value.attrs.href) {
+    node.addEventListener('click', event => {
+      event.preventDefault();
+      const url = new URL(value.attrs.href);
+      if (activeResource === 'webinars' && url.searchParams.get('action') === 'bbb_calendar') {
+        showResource('webinars', '', value.attrs.href);
+        return;
+      }
+      openMaterial(value.attrs.href, node.textContent.trim(), 'resources');
+    });
+  }
+  node.append(...value.children.map(renderSourceNode));
+  return node;
+}
+
+async function showResource(section, title = '', url = '') {
+  const version = ++resourceVersion;
+  activeResource = section;
+  showPage('resources');
+  logAction('tab', section);
+  document.querySelectorAll('[data-section]').forEach(button => {
+    button.classList.toggle('active', button.dataset.section === section);
+  });
+  $('resource-back').classList.toggle('hidden', section !== 'material');
+  $('resource-content').replaceChildren();
+  $('resource-title').textContent = title || sectionTitles[section];
+  $('resource-status').textContent = 'Загружаю данные СДО…';
+  const needsProgram = programSections.has(section);
+  const selector = $('resource-program');
+  $('resource-program-label').classList.toggle('hidden', !needsProgram);
+  try {
+    if (needsProgram && !selector.options.length) {
+      await fillPrograms(selector);
+      if (version !== resourceVersion) return;
+    }
+    const result = await window.pywebview.api.student_section(section, needsProgram ? selector.value : '', url);
+    if (version !== resourceVersion) return;
+    if (!result.ok) throw Error(result.error);
+    $('resource-status').textContent = '';
+    if (result.data.title && !title) $('resource-title').textContent = result.data.title;
+    for (const block of result.data.blocks) {
+      const panel = element('article', 'panel resource-block');
+      panel.append(renderSourceNode(block));
+      $('resource-content').append(panel);
+    }
+  } catch (error) {
+    if (version === resourceVersion) $('resource-status').textContent = error.message;
+  }
+}
+
+function openMaterial(url, title, previousPage = 'assignments') {
+  const path = new URL(url).pathname;
+  if (/^\/mod\/(page|book|label|mvideo|nwresource)\//.test(path)) {
+    materialReturn = previousPage === 'resources' ? activeResource : previousPage;
+    showResource('material', title, url);
+    return;
+  }
+  openSite(url);
 }
 async function openSite(url) {
   logAction('course', new URL(url).pathname);
@@ -32,6 +147,20 @@ function renderItems(parent, items, kind) {
   parent.replaceChildren();
   if (!items.length) { empty(parent, kind === 'deadline' ? 'Сроки пока недоступны. Проверьте задания в разделе «Работы».' : 'Пока ничего нет.'); return; }
   for (const item of items) {
+    if (item.kind === 'раздел') {
+      parent.append(element('h3', 'topic-section-title', item.title));
+      continue;
+    }
+    if (kind === 'notification') {
+      const details = element('details', 'notification-card');
+      details.append(element('summary', '', item.title));
+      details.append(element('p', 'notification-text', item.body || 'СДО не вернула текст уведомления.'));
+      details.addEventListener('toggle', () => {
+        if (details.open) logAction('notification', 'open');
+      });
+      parent.append(details);
+      continue;
+    }
     const row = element('div', 'item');
     row.append(element('div', 'item-icon', kind === 'event' ? '◷' : kind === 'deadline' ? '✓' : '✦'));
     const body = element('div', 'item-body');
@@ -41,9 +170,8 @@ function renderItems(parent, items, kind) {
     row.append(body);
     if (item.url) {
       const button = element('button', '', 'Открыть ↗');
-      button.addEventListener('click', () => openSite(item.url));
+      button.addEventListener('click', () => openMaterial(item.url, item.title));
       row.append(button);
-      if (kind === 'notification') { row.classList.add('clickable'); row.addEventListener('click', () => { logAction('notification', 'open'); openSite(item.url); }); button.remove(); }
     }
     parent.append(row);
   }
@@ -53,6 +181,7 @@ function render() {
   $('count-events').textContent = model.events.length;
   $('count-notifications').textContent = model.notifications.length;
   renderItems($('home-events'), model.events.slice(0, 6), 'event');
+  renderItems($('calendar-list'), model.events, 'event');
   renderItems($('home-deadlines'), model.deadlines.slice(0, 6), 'deadline');
   renderItems($('notifications-list'), model.notifications, 'notification');
   const cards = $('courses-list'); cards.replaceChildren();
@@ -70,6 +199,7 @@ function render() {
   if (!model.courses.length) empty(cards, 'Курсы не найдены. Нажмите «Обновить».');
 }
 async function selectCourse(course) {
+  const version = ++topicVersion;
   logAction('course', course.id);
   $('assignment-heading').textContent = course.title;
   $('open-course').classList.remove('hidden');
@@ -77,25 +207,43 @@ async function selectCourse(course) {
   document.querySelectorAll('#assignment-courses button').forEach(node => node.classList.toggle('active', node.dataset.courseId == course.id));
   empty($('assignment-list'), 'Загружаю темы…');
   const result = await window.pywebview.api.topics(course.url);
+  if (version !== topicVersion) return;
   if (!result.ok) { empty($('assignment-list'), result.error); return; }
   if (!result.items.length) { empty($('assignment-list'), 'Темы не найдены. Откройте курс во встроенном окне.'); return; }
-  renderItems($('assignment-list'), result.items.map(item => ({...item, description: item.kind})), 'deadline');
+  const topics = result.items.map(item => Object.assign({}, item, {description: materialLabels[item.kind] || ''}));
+  renderItems($('assignment-list'), topics, 'deadline');
 }
 let curriculumLoaded = false;
 async function loadCurriculum() {
   if (curriculumLoaded) return;
-  empty($('curriculum-list'), 'Загружаю учебный план…');
-  const result = await window.pywebview.api.curriculum();
+  const selector = $('curriculum-program');
+  const list = $('curriculum-list');
+  empty(list, 'Загружаю учебный план…');
+  try {
+    await fillPrograms(selector);
+  } catch (error) {
+    empty(list, error.message);
+    return;
+  }
+  const program = selector.value;
+  const result = await window.pywebview.api.curriculum(program);
+  if (program !== selector.value) return;
   if (!result.ok) { empty($('curriculum-list'), result.error); return; }
   curriculumLoaded = true;
-  const list = $('curriculum-list'); list.replaceChildren();
+  list.replaceChildren();
   for (const item of result.items) {
     const card = element('button', 'course-card curriculum-card');
     card.append(element('div', 'course-mark', '◈'), element('strong', '', item.title));
     if (item.teacher) card.append(element('p', '', 'Преподаватель: ' + item.teacher));
     if (item.hours) card.append(element('small', '', 'Часы: ' + item.hours));
     if (item.control) card.append(element('small', '', 'Форма контроля: ' + item.control));
-    card.addEventListener('click', () => openSite(item.url)); list.append(card);
+    if (item.grade) card.append(element('small', '', item.grade));
+    card.addEventListener('click', () => {
+      const course = model.courses.find(course => new URL(course.url).searchParams.get('id') === new URL(item.url).searchParams.get('id'));
+      showPage('assignments');
+      selectCourse(course ? {id: course.id, title: item.title, url: item.url} : {title: item.title, url: item.url});
+    });
+    list.append(card);
   }
   if (!result.items.length) empty(list, 'Учебный план пока недоступен.');
 }
@@ -137,7 +285,18 @@ async function init() {
   $('log-path').textContent = await window.pywebview.api.get_log_path();
 }
 document.querySelectorAll('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
-document.querySelectorAll('[data-site]').forEach(button => button.addEventListener('click', () => openSite('https://sdo.i-spo.ru' + button.dataset.site)));
+document.querySelectorAll('[data-section]').forEach(button => {
+  button.addEventListener('click', () => showResource(button.dataset.section));
+});
+$('resource-program').addEventListener('change', () => showResource(activeResource));
+$('curriculum-program').addEventListener('change', () => {
+  curriculumLoaded = false;
+  loadCurriculum();
+});
+$('resource-back').addEventListener('click', () => {
+  if (materialReturn === 'assignments') showPage('assignments');
+  else if (sectionTitles[materialReturn]) showResource(materialReturn);
+});
 $('login-form').addEventListener('submit', async event => {
   event.preventDefault();
   $('login-status').textContent = 'Подключаюсь к sdo.i-spo.ru';
@@ -146,7 +305,26 @@ $('login-form').addEventListener('submit', async event => {
   else $('login-status').textContent = result.error || 'Не удалось войти';
 });
 $('refresh').addEventListener('click', refresh);
-$('logout').addEventListener('click', async () => { await window.pywebview.api.logout(); $('app').classList.add('hidden'); $('login').classList.remove('hidden'); $('username').value = ''; $('password').value = ''; });
+$('logout').addEventListener('click', async () => {
+  await window.pywebview.api.logout();
+  ++resourceVersion;
+  ++topicVersion;
+  programRequest = null;
+  $('curriculum-program').replaceChildren();
+  $('resource-program').replaceChildren();
+  $('resource-content').replaceChildren();
+  $('conversation-list').replaceChildren();
+  $('conversation-messages').replaceChildren();
+  $('message-text').value = '';
+  currentConversation = null;
+  messagesLoaded = false;
+  curriculumLoaded = false;
+  showPage('home');
+  $('app').classList.add('hidden');
+  $('login').classList.remove('hidden');
+  $('username').value = '';
+  $('password').value = '';
+});
 $('dark-theme').addEventListener('change', event => document.body.classList.toggle('light', !event.target.checked));
 $('autostart').addEventListener('change', async event => { const result = await window.pywebview.api.set_autostart(event.target.checked); if (!result.ok) { event.target.checked = !event.target.checked; showMessage(result.error); } });
 window.addEventListener('pywebviewready', init);
@@ -171,8 +349,10 @@ async function openConversation(item) {
   currentConversation = item;
   logAction('message_open', item.id);
   $('conversation-title').textContent = item.name;
+  $('message-form').classList.add('hidden');
   empty($('conversation-messages'), 'Загружаю сообщения…');
   const result = await window.pywebview.api.conversation_messages(item.id);
+  if (currentConversation !== item) return;
   if (!result.ok) { empty($('conversation-messages'), result.error); return; }
   const box = $('conversation-messages'); box.replaceChildren();
   for (const message of result.items) {
@@ -187,11 +367,13 @@ $('message-form').addEventListener('submit', async event => {
   if (!currentConversation) return;
   const text = $('message-text').value.trim();
   if (!text) return;
+  const conversation = currentConversation;
   $('message-form').querySelector('button').disabled = true;
-  const result = await window.pywebview.api.send_message(currentConversation.id, text);
+  const result = await window.pywebview.api.send_message(conversation.id, text);
   $('message-form').querySelector('button').disabled = false;
   logAction('message_send', result.ok ? 'success' : 'failed');
   if (!result.ok) { showMessage(result.error); return; }
+  if (currentConversation !== conversation) return;
   $('message-text').value = '';
-  await openConversation(currentConversation);
+  await openConversation(conversation);
 });

@@ -16,6 +16,8 @@ from PIL import Image
 
 from .client import BASE, SDOClient, SDOError, safe_url
 from .diagnostic_log import logger, setup_logging, LOG_FILE
+from .sections import StudentSections
+from .webview_compat import install_requirejs_compatibility
 
 
 SERVICE = "SDO-Reborn"
@@ -32,12 +34,26 @@ def icon_image() -> Image.Image:
 
 
 class Bridge:
+    PUBLIC_METHODS = (
+        "bootstrap", "resume", "login", "refresh", "topics", "curriculum",
+        "programs", "student_section", "open_site", "back_to_app", "log_event",
+        "get_log_path", "conversations", "conversation_messages", "send_message",
+        "logout", "settings", "set_autostart",
+    )
+
+    def __dir__(self):
+        # Avoid recursive inspection of WebView2's COM objects by pywebview.
+        if self.site_target:
+            return ["back_to_app"]
+        return list(self.PUBLIC_METHODS)
+
     def __init__(self):
         self.client = SDOClient()
+        self.student_sections = StudentSections(self.client)
         self.window = None
-        self.site_window = None
-        self.site_target = BASE + "/my/"
+        self.site_target = ""
         self.site_login_pending = False
+        self._content_owner = None
         self.cached_data = None
         self._lock = threading.RLock()
         self._tray = None
@@ -71,8 +87,8 @@ class Bridge:
         except SDOError as error:
             logger.warning("auth_resume_failed type=SDOError")
             return {"ok": False, "error": str(error)}
-        except Exception:
-            logger.exception("auth_resume_failed")
+        except Exception as error:
+            logger.error("auth_resume_failed type=%s", type(error).__name__)
             return {"ok": False, "error": "Не удалось прочитать сохранённый вход"}
 
     def login(self, username: str, password: str):
@@ -89,8 +105,8 @@ class Bridge:
         except SDOError as error:
             logger.warning("auth_login_failed type=SDOError")
             return {"ok": False, "error": str(error)}
-        except Exception:
-            logger.exception("auth_login_failed")
+        except Exception as error:
+            logger.error("auth_login_failed type=%s", type(error).__name__)
             return {"ok": False, "error": "Не удалось сохранить вход в диспетчере учётных данных Windows"}
 
     def refresh(self):
@@ -118,12 +134,51 @@ class Bridge:
         except SDOError as error:
             return {"ok": False, "error": str(error)}
 
-    def curriculum(self):
+    def curriculum(self, program=""):
         try:
             with self._lock:
-                return {"ok": True, "items": self.client.curriculum()}
+                programs = self.student_sections.programs()
+                if not programs:
+                    raise SDOError("СДО не показала учебные программы")
+                if not program:
+                    program = next((item["id"] for item in programs if item["active"]), programs[0]["id"])
+                if not any(item["id"] == program for item in programs):
+                    raise SDOError("Учебная программа не найдена в текущей учётной записи")
+                items = self.client.curriculum(program)
+                logger.info("curriculum_loaded count=%d", len(items))
+                return {"ok": True, "items": items}
         except SDOError as error:
+            logger.warning("curriculum_failed type=SDOError")
             return {"ok": False, "error": str(error)}
+
+    def programs(self):
+        return self._section_operation("programs", self.student_sections.programs)
+
+    def student_section(self, section, program="", material_url=""):
+        section_name = section if section in {
+            "documents", "schedule", "grades", "official", "webinars", "news",
+            "profile", "material",
+        } else "unknown"
+        return self._section_operation(
+            section_name, self.student_sections.read, section, program, material_url
+        )
+
+    def _section_operation(self, name, operation, *arguments):
+        started = time.monotonic()
+        logger.info("section_start section=%s", name)
+        try:
+            with self._lock:
+                if not self.client.username:
+                    raise SDOError("Сначала войдите в СДО")
+                data = operation(*arguments)
+            logger.info("section_loaded section=%s ms=%d", name, (time.monotonic() - started) * 1000)
+            return {"ok": True, "data": data}
+        except SDOError as error:
+            logger.warning("section_failed section=%s type=SDOError", name)
+            return {"ok": False, "error": str(error)}
+        except Exception as error:
+            logger.error("section_failed section=%s type=%s", name, type(error).__name__)
+            return {"ok": False, "error": "Не удалось прочитать ответ СДО"}
 
     def open_site(self, url: str):
         try:
@@ -142,6 +197,9 @@ class Bridge:
                     raise SDOError("Не найдена учебная программа для этого раздела")
             if not self.client.username:
                 raise SDOError("Сначала войдите в СДО")
+            if self._content_owner != self.client.username:
+                self.window.clear_cookies()
+                self._content_owner = self.client.username
             self.site_target = url
             self.site_login_pending = False
             logger.info("content_open path=%s", urlparse(url).path)
@@ -153,6 +211,7 @@ class Bridge:
 
     def back_to_app(self):
         logger.info("content_back_to_app")
+        self.site_target = ""
         self.window.load_url(str(resource_path("web/index.html")))
         return {"ok": True}
 
@@ -216,15 +275,14 @@ class Bridge:
                 })()""" % (json.dumps(username), json.dumps(password))
                 self.site_login_pending = bool(self.window.evaluate_js(script))
                 return
+            resume_target = self.site_login_pending and self.site_target and self.site_target != current
             self.site_login_pending = False
-            if self.site_target and self.site_target != current and urlparse(current).path in ("/", "/my/"):
-                target, self.site_target = self.site_target, ""
-                self.window.load_url(target)
+            if resume_target:
+                self.window.load_url(self.site_target)
                 return
-            self.site_target = ""
             self.window.evaluate_js("""(function(){if(document.getElementById('osek-return'))return;const b=document.createElement('button');b.id='osek-return';b.textContent='← Вернуться в ОСЭК-Remastered';b.style.cssText='position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#696cf5;color:white;border:0;border-radius:12px;padding:13px 18px;font:600 14px Segoe UI;box-shadow:0 4px 18px #0005;cursor:pointer';b.onclick=()=>window.pywebview.api.back_to_app();document.body.appendChild(b)})()""")
         except Exception:
-            logger.exception("content_load_error")
+            logger.error("content_load_error")
             self.site_login_pending = False
 
     def logout(self):
@@ -235,14 +293,14 @@ class Bridge:
                 keyring.delete_password(SERVICE, username)
                 keyring.delete_password(SERVICE, "__last_user__")
             except keyring.errors.PasswordDeleteError:
-                pass
+                logger.info("auth_logout_saved_entry_absent")
         with self._lock:
             self.client.close()
             self.client = SDOClient()
+            self.student_sections = StudentSections(self.client)
             self.cached_data = None
-        if self.site_window:
-            self.site_window.destroy()
-            self.site_window = None
+        self.window.clear_cookies()
+        self._content_owner = None
         return {"ok": True}
 
     def settings(self):
@@ -264,7 +322,7 @@ class Bridge:
                     try:
                         winreg.DeleteValue(key, "ОСЭК-Remastered")
                     except FileNotFoundError:
-                        pass
+                        logger.info("autostart_entry_already_absent")
             return {"ok": True, "autostart": enabled}
         except OSError:
             return {"ok": False, "error": "Не удалось изменить автозагрузку"}
@@ -329,6 +387,7 @@ class Bridge:
 
 def main():
     setup_logging()
+    install_requirejs_compatibility()
     bridge = Bridge()
     window = webview.create_window(
         "ОСЭК-Remastered", str(resource_path("web/index.html")), js_api=bridge,
