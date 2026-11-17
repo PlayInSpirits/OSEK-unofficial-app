@@ -9,6 +9,7 @@ from PIL import Image, UnidentifiedImageError
 from requests import RequestException
 
 from .client import SDOError, safe_url
+from .library import LIBRARY_HOST, public_request, public_url
 
 
 def data_url(content, mime):
@@ -56,8 +57,11 @@ class StudentFiles:
         return data_url(raw, mime)
 
     def pdf_page(self, url, index):
-        url = safe_url(url)
         parsed = urlparse(url)
+        is_public = parsed.hostname == LIBRARY_HOST
+        url = public_url(url) if is_public else safe_url(url)
+        if is_public and not (parsed.path.startswith("/pluginfile.php/") and parsed.path.lower().endswith(".pdf")):
+            raise SDOError("Ссылка не является презентацией библиотеки")
         if parsed.path not in {"/report/studybook/getpdf.php", "/mod/gbooks/view.php"} and not (
             parsed.path.startswith("/pluginfile.php/") and parsed.path.lower().endswith(".pdf")
         ):
@@ -67,7 +71,20 @@ class StudentFiles:
         if not isinstance(index, int) or isinstance(index, bool) or index < 0:
             raise SDOError("Неверный номер страницы")
         if self.pdf_url != url:
-            content = self._download(url, 35 * 1024 * 1024)
+            limit = 35 * 1024 * 1024
+            if is_public:
+                with public_request("GET", url, stream=True) as response:
+                    buffer = bytearray()
+                    try:
+                        for part in response.iter_content(chunk_size=65536):
+                            if len(buffer) + len(part) > limit:
+                                raise SDOError("PDF библиотеки превышает предел просмотра")
+                            buffer.extend(part)
+                    except RequestException:
+                        raise SDOError("Загрузка презентации прервалась") from None
+                content = bytes(buffer)
+            else:
+                content = self._download(url, limit)
             if not content.startswith(b"%PDF-"):
                 raise SDOError("СДО вернула ответ без PDF")
             self.pdf_url, self.pdf_data = url, content

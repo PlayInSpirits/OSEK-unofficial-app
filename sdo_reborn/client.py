@@ -65,7 +65,7 @@ class SDOClient:
         self._password = None
         self.session.close()
 
-    def _request(self, method: str, path: str, *, data=None, json=None, stream=False) -> requests.Response:
+    def _request(self, method: str, path: str, *, data=None, json=None, stream=False, headers=None) -> requests.Response:
         url = safe_url(path)
         for _ in range(6):
             elapsed = time.monotonic() - self._last_request
@@ -74,7 +74,8 @@ class SDOClient:
             try:
                 started = time.monotonic()
                 response = self.session.request(
-                    method, url, data=data, json=json, timeout=20, allow_redirects=False, stream=stream
+                    method, url, data=data, json=json, timeout=20, allow_redirects=False,
+                    stream=stream, headers=headers,
                 )
             except requests.RequestException as error:
                 logger.warning("sdo_request_failed method=%s type=%s", method, type(error).__name__)
@@ -90,6 +91,9 @@ class SDOClient:
                 url = safe_url(urljoin(url, location))
                 if response.status_code in (301, 302, 303) and method.upper() == "POST":
                     method, data, json = "GET", None, None
+                    headers = None
+                elif method.upper() == "POST":
+                    raise SDOError("СДО перенаправила отправку формы без подтверждения")
                 continue
             if response.status_code >= 400:
                 response.close()
@@ -119,6 +123,9 @@ class SDOClient:
         self._password = password
 
     def _get(self, path: str) -> str:
+        return self._authenticated_response(path).text
+
+    def _authenticated_response(self, path: str) -> requests.Response:
         response = self._request("GET", path)
         if "/login/index.php" in response.url or not self._logged_in(response.text):
             if not self.username or not self._password:
@@ -127,7 +134,7 @@ class SDOClient:
             response = self._request("GET", path)
             if not self._logged_in(response.text):
                 raise SDOError("Сессия СДО истекла")
-        return response.text
+        return response
 
     def dashboard(self) -> dict:
         my_html = self._get("/my/")
@@ -318,24 +325,26 @@ class SDOClient:
             })
         return result
 
-    def topics(self, course_url: str) -> list[dict]:
+    def topics(self, course_url: str, html=None) -> list[dict]:
         parsed = urlparse(safe_url(course_url))
         if parsed.path != "/course/view.php" or not parse_qs(parsed.query).get("id"):
             raise SDOError("Некорректная ссылка на курс")
-        soup = BeautifulSoup(self._get(course_url), "html.parser")
+        soup = BeautifulSoup(self._get(course_url) if html is None else html, "html.parser")
         course = soup.select_one("#region-main .course-content")
         if not course:
             raise SDOError("СДО не вернула список тем этого курса")
         result = []
         seen = set()
         for link in course.select('.sectionname, a[href*="/mod/"]'):
+            if link.find_parent(class_="activityinline"):
+                continue
             if "sectionname" in link.get("class", []):
                 title = link.get_text(" ", strip=True)
                 if title:
                     result.append({"title": title, "url": "", "kind": "раздел"})
                 continue
             try:
-                url = safe_url(link.get("href", ""))
+                url = safe_url(link.get("href", "").replace("&amp;", "&"))
             except SDOError:
                 continue
             if url in seen:
@@ -349,7 +358,12 @@ class SDOClient:
                 parent = link.find_parent(class_="activity")
                 title = parent.get_text(" ", strip=True)[:120] if parent else ""
             if title:
-                result.append({"title": title, "url": url, "kind": urlparse(url).path.split("/")[2]})
+                info = link.find_parent(class_="activity")
+                status = info.select_one(".automatic-completion-conditions") if info else None
+                result.append({
+                    "title": title, "url": url, "kind": urlparse(url).path.split("/")[2],
+                    "completion": status.get_text(" ", strip=True) if status else "",
+                })
         return result
 
     def assignments(self, course_url: str) -> list[dict]:

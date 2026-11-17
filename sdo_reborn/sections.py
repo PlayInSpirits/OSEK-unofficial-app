@@ -1,12 +1,15 @@
 """Read the student-facing sections without running the site's JavaScript."""
 
 import re
-from urllib.parse import parse_qs, urljoin, urlparse
+from dataclasses import asdict
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString
 
-from .client import SDOError, safe_url
+from .activity_forms import ActivityForms, UPLOAD_MODULES
+from .client import SDOError, parse_events, safe_url
+from .library import LIBRARY_HOST, WebinarLibrary, public_url
 
 
 PROGRAM_ACTIONS = {
@@ -56,7 +59,11 @@ def project_content(node, base):
         href = node["href"]
         if not href.startswith("#"):
             try:
-                url = safe_url(urljoin(base, href))
+                url = urljoin(base, href)
+                if urlparse(base).hostname == LIBRARY_HOST and urlparse(url).hostname == LIBRARY_HOST:
+                    public_url(url)
+                else:
+                    safe_url(url)
                 parsed = urlparse(url)
                 if "sesskey" not in parse_qs(parsed.query) and not parsed.path.startswith("/login/"):
                     attrs["href"] = url
@@ -70,7 +77,7 @@ def project_content(node, base):
                 if len(src) <= 8_000_000 and INLINE_IMAGE.fullmatch(src):
                     attrs["src"] = src
                 else:
-                    attrs["src"] = safe_url(src)
+                    attrs["src"] = public_url(src) if parsed.hostname == LIBRARY_HOST and urlparse(base).hostname == LIBRARY_HOST else safe_url(src)
             elif parsed.scheme == "https" and parsed.hostname in MEDIA_HOSTS and parsed.port is None:
                 attrs["src"] = src
             else:
@@ -98,6 +105,71 @@ class StudentSections:
         self.files = files
         self.home = None
         self.calendar_html = ""
+        self.forms = ActivityForms(client)
+        self.library = WebinarLibrary(client, project_content)
+
+    def course(self, url):
+        html = self.client._get(url)
+        items = self.client.topics(url, html)
+        soup = BeautifulSoup(html, "html.parser")
+        lead = soup.select(
+            "#region-main .course-content .section-summary .summarytext,"
+            "#region-main .course-content .activityinline .description-inner"
+        )
+        overview = [project_content(node, url) for node in lead if node.get_text(strip=True)]
+        return {"items": items, "overview": overview}
+
+    def recordings(self, page, title):
+        return self.library.catalog(self._home(), page, title)
+
+    def student_contact(self, final_url):
+        query = parse_qs(urlparse(final_url).query)
+        user_id = query.get("id", [""])[0]
+        if not user_id.isdecimal():
+            raise SDOError("СДО не указала получателя сообщения")
+        messages_html, me = self.client._message_context()
+        address = {"referenceuserid": me, "userids": [int(user_id)], "includeprivacyinfo": True}
+        members = self.client._ajax(messages_html, "core_message_get_member_info", address)
+        if not isinstance(members, list) or not members:
+            raise SDOError("СДО не показала получателя для этого курса. Можно поискать преподавателя в разделе «Сообщения».")
+        person = members[0]
+        if int(person.get("id", 0)) != int(user_id):
+            raise SDOError("СДО вернула другой профиль")
+        thread = self.client._ajax(messages_html, "core_message_get_conversation_between_users", {"userid": me, "otheruserid": int(user_id)})
+        return {
+            "name": person["fullname"], "userId": int(user_id),
+            "id": thread.get("id") if isinstance(thread, dict) else None,
+            "canMessage": not person.get("isblocked") and person.get("canmessage") not in (False, 0),
+        }
+
+    def _material(self, url, soup):
+        title = soup.select_one("#page-header h1")
+        module = urlparse(url).path.split("/")[2]
+        forms = self.forms.describe(soup, url, project_content)
+        blocks = self._material_blocks(soup, url)
+        if module in UPLOAD_MODULES:
+            for form in soup.select("#region-main form[method='get'][action]"):
+                action = urlparse(urljoin(url, form["action"]))
+                if action.path != f"/mod/{module}/view.php":
+                    continue
+                fields = {field["name"]: field.get("value", "") for field in form.select("input[type='hidden'][name]")}
+                if fields.get("action") != "editsubmission":
+                    continue
+                button = form.select_one("button, input[type='submit']")
+                if button:
+                    label = button.get_text(" ", strip=True) or button.get("value", "Редактировать ответ")
+                    href = safe_url(urlunparse(action._replace(query=urlencode(fields))))
+                    blocks.append({"tag": "a", "attrs": {"href": href}, "children": [label]})
+        interactive = module in UPLOAD_MODULES | {"quiz", "askquest", "forum"}
+        return {
+            "title": title.get_text(" ", strip=True) if title else "",
+            "blocks": blocks, "forms": forms, "url": url,
+            "notice": "СДО не предоставила поддерживаемую форму для этого экрана." if interactive and not forms else "",
+        }
+
+    def submit_activity(self, token, button, values, paths):
+        url, soup = self.forms.submit(token, button, values, paths)
+        return self._material(url, soup)
 
     def _home(self):
         if self.home is None:
@@ -241,6 +313,20 @@ class StudentSections:
     def read(self, section, program="", material_url=""):
         if section == "event":
             return self._event(material_url)
+        if section == "recording":
+            return self.library.detail(material_url)
+        if section == "calendar_day":
+            parsed = urlparse(safe_url(material_url))
+            query = parse_qs(parsed.query)
+            if parsed.path != "/calendar/view.php" or query.get("view") != ["day"]:
+                raise SDOError("СДО не указала день календаря")
+            html = self.client._get(material_url)
+            soup = BeautifulSoup(html, "html.parser")
+            heading = soup.select_one(".calendar-controls h2, #region-main h2")
+            return {
+                "title": heading.get_text(" ", strip=True) if heading else "События дня",
+                "blocks": [], "events": [asdict(item) for item in parse_events(html)],
+            }
         if section not in SECTION_SELECTORS:
             raise SDOError("Неизвестный раздел")
         if section in {"material", "webinars"} and material_url:
@@ -248,26 +334,23 @@ class StudentSections:
         else:
             url = self._section_url(section, program)
         parsed = urlparse(url)
-        if section == "material" and not parsed.path.startswith("/mod/"):
+        if section == "material" and not parsed.path.startswith(("/mod/", "/message/index.php")):
             raise SDOError("Эта ссылка не является учебным материалом")
         if section == "webinars" and material_url:
             query = parse_qs(parsed.query)
             if parsed.path != "/" or query.get("action") != ["bbb_calendar"] or set(query) - {"action", "time", "view"}:
                 raise SDOError("Некорректная ссылка календаря вебинаров")
+        if section == "material":
+            response = self.client._authenticated_response(url)
+            soup = BeautifulSoup(response.text, "html.parser")
+            if urlparse(response.url).path == "/message/index.php":
+                return {"blocks": [], "contact": self.student_contact(response.url)}
+            return self._material(response.url, soup)
         soup = BeautifulSoup(self.client._get(url), "html.parser")
         if section == "profile":
             return self._profile(soup, url)
         if section == "webinars":
             return self._webinars(soup, url)
-        if section == "material":
-            title = soup.select_one("#page-header h1")
-            module = parsed.path.split("/")[2]
-            interactive_form = module in {"quiz", "assign", "assignpractice", "forum", "askquest"}
-            return {
-                "title": title.get_text(" ", strip=True) if title else "",
-                "blocks": self._material_blocks(soup, url),
-                "notice": "Этот экран показывает материалы. Отправка через форму СДО пока недоступна." if interactive_form else "",
-            }
         blocks = soup.select(SECTION_SELECTORS[section])
         if section == "documents":
             for block in blocks:

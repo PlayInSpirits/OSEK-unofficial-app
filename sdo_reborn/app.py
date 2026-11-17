@@ -37,6 +37,7 @@ class Bridge:
         "programs", "student_section", "course_image", "pdf_page", "log_event",
         "get_log_path", "conversations", "conversation_messages", "send_message",
         "search_people", "send_to_user",
+        "recordings", "activity_pick", "activity_submit",
         "logout", "settings", "set_autostart",
     )
 
@@ -50,6 +51,7 @@ class Bridge:
         self.student_sections = StudentSections(self.client, self.files)
         self.window = None
         self.cached_data = None
+        self._activity_files = {}
         self._lock = threading.RLock()
         self._tray = None
         self._quitting = False
@@ -93,6 +95,7 @@ class Bridge:
                 self.client.login(username, password)
                 self.files = StudentFiles(self.client)
                 self.student_sections = StudentSections(self.client, self.files)
+                self._activity_files.clear()
                 keyring.set_password(SERVICE, username.strip(), password)
                 keyring.set_password(SERVICE, "__last_user__", username.strip())
                 data = self.client.dashboard()
@@ -125,11 +128,7 @@ class Bridge:
             return {"ok": False, "error": str(error)}
 
     def topics(self, course_url: str):
-        try:
-            with self._lock:
-                return {"ok": True, "items": self.client.topics(course_url)}
-        except SDOError as error:
-            return {"ok": False, "error": str(error)}
+        return self._section_operation("course", self.student_sections.course, course_url)
 
     def curriculum(self, program=""):
         try:
@@ -154,7 +153,7 @@ class Bridge:
     def student_section(self, section, program="", material_url=""):
         section_name = section if section in {
             "documents", "schedule", "grades", "official", "webinars", "news",
-            "profile", "material", "event",
+            "profile", "material", "event", "calendar_day", "recording",
         } else "unknown"
         return self._section_operation(
             section_name, self.student_sections.read, section, program, material_url
@@ -165,6 +164,39 @@ class Bridge:
 
     def pdf_page(self, url, index):
         return self._section_operation("pdf", self.files.pdf_page, url, index)
+
+    def recordings(self, page, title):
+        return self._section_operation("recordings", self.student_sections.recordings, page, title)
+
+    def activity_pick(self, token):
+        try:
+            section = self.student_sections
+            limit = section.forms.upload_limit(token)
+            if limit is not None and limit <= 0:
+                raise SDOError("Все места для вложений заняты")
+            result = self.window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=limit != 1)
+            if not result:
+                return {"ok": True, "names": None}
+            if limit is not None and len(result) > limit:
+                raise SDOError(f"Можно выбрать не больше {limit} файлов")
+            with self._lock:
+                if section is not self.student_sections:
+                    raise SDOError("Учётная запись изменилась")
+                section.forms.upload_limit(token)
+                self._activity_files[token] = result
+                while len(self._activity_files) > 35:
+                    del self._activity_files[next(iter(self._activity_files))]
+            return {"ok": True, "names": [Path(entry).name for entry in result]}
+        except SDOError as error:
+            return {"ok": False, "error": str(error)}
+
+    def activity_submit(self, token, button, values, include_files):
+        with self._lock:
+            selected = self._activity_files.pop(token, ())
+            return self._section_operation(
+                "activity_submit", self.student_sections.submit_activity, token, button, values,
+                selected if include_files else (),
+            )
 
     def _section_operation(self, name, operation, *arguments):
         started = time.monotonic()
@@ -241,6 +273,7 @@ class Bridge:
             self.client = SDOClient()
             self.files = StudentFiles(self.client)
             self.student_sections = StudentSections(self.client, self.files)
+            self._activity_files.clear()
             self.cached_data = None
         self.window.clear_cookies()
         return {"ok": True}

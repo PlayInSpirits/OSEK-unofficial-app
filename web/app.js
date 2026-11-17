@@ -7,6 +7,8 @@ let activeResource = '';
 let resourceVersion = 0;
 let topicVersion = 0;
 let readerVersion = 0;
+let libraryPage = 0;
+let libraryQuery = '';
 const readerHistory = [];
 const imageObserver = new IntersectionObserver(entries => {
   for (const entry of entries) {
@@ -22,6 +24,7 @@ const sectionTitles = {
   grades: 'Зачётная книжка',
   official: 'Официальные уведомления',
   webinars: 'Вебинары',
+  library: 'Вебинары',
   news: 'Новости',
   profile: 'Профиль',
   material: 'Учебный материал',
@@ -35,6 +38,7 @@ const materialLabels = {
   gbooks: 'Книга',
   quiz: 'Тест',
   assign: 'Задание',
+  assignauto: 'Работа с загрузкой ответа',
   assignpractice: 'Практическое задание',
   forum: 'Форум',
 };
@@ -147,7 +151,7 @@ async function showResource(section, title = '', url = '', program = '') {
   showPage('resources');
   logAction('tab', section);
   document.querySelectorAll('[data-section]').forEach(button => {
-    button.classList.toggle('active', button.dataset.section === section);
+    button.classList.toggle('active', button.dataset.section === section || section === 'webinars' && button.dataset.section === 'library');
   });
   $('resource-content').replaceChildren();
   $('resource-title').textContent = title || sectionTitles[section];
@@ -161,13 +165,17 @@ async function showResource(section, title = '', url = '', program = '') {
       if (version !== resourceVersion) return;
     }
     if (needsProgram && program) selector.value = program;
-    const result = await window.pywebview.api.student_section(section, needsProgram ? selector.value : '', url);
+    const api = window.pywebview.api;
+    const result = section === 'library'
+      ? await api.recordings(libraryPage, libraryQuery)
+      : await api.student_section(section, needsProgram ? selector.value : '', url);
     if (version !== resourceVersion) return;
     if (!result.ok) throw Error(result.error);
     $('resource-status').textContent = '';
     if (result.data.title && !title) $('resource-title').textContent = result.data.title;
     if (section === 'profile') renderProfile(result.data);
     else if (section === 'webinars') renderWebinars(result.data);
+    else if (section === 'library') renderLibrary(result.data);
     else appendBlocks($('resource-content'), result.data.blocks);
   } catch (error) {
     if (version === resourceVersion) $('resource-status').textContent = error.message;
@@ -185,6 +193,14 @@ function appendBlocks(target, blocks) {
 
 function openMaterial(url, title) {
   const address = new URL(url);
+  if (address.pathname === '/calendar/view.php' && address.searchParams.get('view') === 'day') {
+    openReader('calendar_day', title, url);
+    return;
+  }
+  if (address.hostname === 'sdo.vgaps.ru' && address.pathname === '/library.php') {
+    openReader('recording', title, url);
+    return;
+  }
   const isPDF = address.pathname.endsWith('.pdf') || address.pathname === '/report/studybook/getpdf.php'
     || (address.pathname === '/mod/gbooks/view.php' && address.searchParams.has('pdf'));
   openReader(isPDF ? 'pdf' : 'material', title, url);
@@ -218,15 +234,215 @@ async function renderReader() {
       : await api.student_section(reading.section, '', reading.url);
     if (version !== readerVersion) return;
     if (!result.ok) throw Error(result.error);
-    $('reader-status').textContent = result.data.notice || '';
-    if (result.data.title) $('reader-title').textContent = result.data.title;
     if (reading.section === 'pdf') renderPdf(result.data, reading);
-    else if (result.data.blocks.length) appendBlocks(content, result.data.blocks);
-    else empty(content, 'СДО не вернула подробности.');
+    else paintReader(result.data, reading);
+    if (reading.section === 'pdf') $('reader-status').textContent = '';
     document.querySelector('main.content').scrollTop = reading.scroll;
   } catch (error) {
     if (version === readerVersion) $('reader-status').textContent = error.message;
   }
+}
+
+function paintReader(data, reading) {
+  const content = $('reader-content');
+  content.replaceChildren();
+  $('reader-status').textContent = data.notice || '';
+  if (data.title) $('reader-title').textContent = data.title;
+  if (data.url) reading.url = data.url;
+  if (data.contact) {
+    renderTeacher(data.contact, content);
+  } else if (data.events) {
+    const list = element('div', 'panel list');
+    renderItems(list, data.events, 'event');
+    content.append(list);
+  } else {
+    appendBlocks(content, data.blocks);
+    for (const form of data.forms || []) content.append(renderActivityForm(form, reading));
+    if (!data.blocks.length && !data.forms?.length) empty(content, 'СДО не вернула подробности.');
+  }
+}
+
+function renderTeacher(contact, parent) {
+  const form = element('form', 'panel resource-block activity-form');
+  form.append(element('h2', '', contact.name));
+  const open = internalLink('Открыть переписку', () => {
+    showPage('messages');
+    openConversation(contact);
+  });
+  form.append(open);
+  if (!contact.canMessage) {
+    form.append(element('p', 'muted', 'СДО ограничила отправку этому собеседнику.'));
+  } else {
+    const field = element('textarea');
+    field.required = true;
+    field.maxLength = 10000;
+    field.setAttribute('aria-label', 'Вопрос преподавателю');
+    const status = element('p', 'muted');
+    const send = element('button', 'primary', 'Отправить вопрос');
+    form.append(field, send, status);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!field.value.trim()) return;
+      send.disabled = true;
+      try {
+        const api = window.pywebview.api;
+        const result = contact.id ? await api.send_message(contact.id, field.value) : await api.send_to_user(contact.userId, field.value);
+        if (!result.ok) throw Error(result.error);
+        field.value = '';
+        status.textContent = 'СДО подтвердила отправку.';
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        send.disabled = false;
+      }
+    });
+  }
+  parent.append(form);
+}
+
+function makeActivityWidget(widget) {
+  const label = element('label', 'activity-field');
+  const input = element(['select', 'textarea'].includes(widget.kind) ? widget.kind : 'input');
+  if (input.tagName === 'INPUT') input.type = widget.kind;
+  input.name = widget.name;
+  input.autocomplete = 'off';
+  for (const option of widget.options) {
+    const node = element('option', '', option.label);
+    node.value = option.value;
+    input.append(node);
+  }
+  input.value = widget.value;
+  if (widget.kind === 'radio' || widget.kind === 'checkbox') {
+    input.checked = widget.checked;
+    label.classList.add('activity-choice');
+    label.append(input, element('span', '', widget.label));
+  } else {
+    label.append(element('span', '', widget.label), input);
+  }
+  return label;
+}
+
+function renderActivityForm(data, reading) {
+  const form = element('form', 'panel resource-block activity-form');
+  const controls = element('fieldset');
+  const status = element('p', 'muted');
+  status.setAttribute('role', 'status');
+  let files = [];
+  if (data.upload) {
+    controls.append(element('h2', '', 'Загрузить ответ'));
+    if (data.existingCount) controls.append(element('p', 'muted', data.existingFiles.join(', ') || 'На СДО уже есть вложения.'));
+    const pick = element('button', 'ghost', 'Прикрепить файл');
+    pick.type = 'button';
+    pick.disabled = data.maxFiles > 0 && data.existingCount >= data.maxFiles;
+    const remove = element('button', 'ghost hidden', 'Отменить выбор');
+    remove.type = 'button';
+    const selection = element('p', 'muted');
+    pick.onclick = async () => {
+      try {
+        const result = await window.pywebview.api.activity_pick(data.token);
+        if (!result.ok) throw Error(result.error);
+        if (result.names) {
+          files = result.names;
+          selection.textContent = files.join(', ');
+          remove.classList.toggle('hidden', !files.length);
+        }
+      } catch (error) {
+        status.textContent = error.message;
+      }
+    };
+    remove.onclick = () => {
+      files = [];
+      selection.textContent = '';
+      remove.classList.add('hidden');
+    };
+    controls.append(pick, remove, selection);
+  }
+  for (const group of data.groups) {
+    if (group.content) controls.append(renderSourceNode(group.content));
+    for (const widget of group.widgets) controls.append(makeActivityWidget(widget));
+  }
+  for (const [index, text] of data.buttons.entries()) {
+    const button = element('button', 'primary', text);
+    button.type = 'submit';
+    button.value = String(index);
+    controls.append(button);
+  }
+  form.append(controls, status);
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (data.upload && !files.length && !data.existingCount && !data.groups.some(group => group.widgets.length)) {
+      status.textContent = 'Выберите файл для ответа.';
+      return;
+    }
+    if (data.confirm && !window.confirm(event.submitter.textContent + '?')) return;
+    const index = Number(event.submitter?.value || 0);
+    const values = Object.fromEntries(new FormData(form));
+    const version = readerVersion;
+    controls.disabled = true;
+    status.textContent = files.length ? 'Загружаю файл и сохраняю ответ…' : 'Отправляю данные в СДО…';
+    try {
+      const result = await window.pywebview.api.activity_submit(data.token, index, values, Boolean(files.length));
+      if (version !== readerVersion) return;
+      if (!result.ok) throw Error(result.error);
+      paintReader(result.data, reading);
+      $('reader-status').textContent = result.data.notice || 'СДО подтвердила действие.';
+      document.querySelector('main.content').scrollTop = 0;
+    } catch (error) {
+      if (version !== readerVersion) return;
+      status.textContent = error.message;
+      const reload = element('button', 'ghost', 'Обновить форму');
+      reload.type = 'button';
+      reload.onclick = renderReader;
+      form.append(reload);
+    }
+  });
+  return form;
+}
+
+function renderLibrary(data) {
+  const parent = $('resource-content');
+  const filters = element('form', 'webinar-month');
+  const input = element('input', 'library-search');
+  input.type = 'search';
+  input.value = libraryQuery;
+  input.placeholder = 'Название вебинара';
+  input.setAttribute('aria-label', 'Поиск по записям вебинаров');
+  input.maxLength = 150;
+  const button = element('button', 'ghost', 'Найти');
+  filters.append(input, button, internalLink('Календарь вебинаров', () => showResource('webinars')));
+  filters.onsubmit = event => {
+    event.preventDefault();
+    libraryQuery = input.value.trim();
+    libraryPage = 0;
+    showResource('library');
+  };
+  parent.append(filters);
+  const cards = element('div', 'course-grid');
+  for (const item of data.items) {
+    const card = element('article', 'course-card library-card');
+    if (item.image) {
+      const img = element('img');
+      img.src = item.image;
+      img.alt = '';
+      img.loading = 'lazy';
+      card.append(img);
+    }
+    card.append(internalLink(item.title, () => openReader('recording', item.title, item.url)));
+    card.append(element('small', '', [item.author, item.date].filter(Boolean).join(' · ')));
+    cards.append(card);
+  }
+  if (!data.items.length) empty(cards, 'По этому запросу записей нет.');
+  parent.append(cards);
+  const paging = element('div', 'webinar-month');
+  if (libraryPage) paging.append(internalLink('← Предыдущая страница', () => {
+    --libraryPage;
+    showResource('library');
+  }));
+  if (data.more) paging.append(internalLink('Следующая страница →', () => {
+    ++libraryPage;
+    showResource('library');
+  }));
+  parent.append(paging);
 }
 
 function renderPdf(result, reading) {
@@ -252,6 +468,7 @@ function renderWebinars(data) {
   const parent = $('resource-content');
   const bar = element('div', 'webinar-month');
   bar.append(element('h2', '', data.month));
+  bar.append(internalLink('Записи вебинаров', () => showResource('library')));
   for (const item of data.controls) {
     bar.append(internalLink(item.title, () => showResource('webinars', '', item.url)));
   }
@@ -318,6 +535,7 @@ function renderItems(parent, items, kind) {
     }
     const detail = item.when ? String(item.when) : item.description || '';
     if (detail) body.append(element('small', '', detail));
+    if (item.completion) body.append(element('small', 'completion-note', item.completion));
     row.append(body);
     parent.append(row);
   }
@@ -376,9 +594,15 @@ async function selectCourse(course) {
   const result = await window.pywebview.api.topics(course.url);
   if (version !== topicVersion) return;
   if (!result.ok) { empty($('assignment-list'), result.error); return; }
-  if (!result.items.length) { empty($('assignment-list'), 'СДО не вернула темы курса.'); return; }
-  const topics = result.items.map(item => Object.assign({}, item, {description: materialLabels[item.kind] || ''}));
+  if (!result.data.items.length) { empty($('assignment-list'), 'СДО не вернула темы курса.'); return; }
+  const topics = result.data.items.map(item => Object.assign({}, item, {description: materialLabels[item.kind] || ''}));
   renderItems($('assignment-list'), topics, 'deadline');
+  if (result.data.overview.length) {
+    const overview = element('section', 'course-overview');
+    overview.append(element('h3', '', 'О дисциплине'));
+    for (const block of result.data.overview) overview.append(renderSourceNode(block));
+    $('assignment-list').prepend(overview);
+  }
 }
 let curriculumLoaded = '';
 let curriculumVersion = 0;
