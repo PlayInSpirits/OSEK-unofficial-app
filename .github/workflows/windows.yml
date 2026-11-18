@@ -29,7 +29,7 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "OSEK-v0.$version") {
             throw 'Release tag must match web/version.txt'
           }
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx --name ОСЭК-Remastered --icon assets/icon.ico --add-data "web:web" --add-data "assets/icon.png:assets" --collect-all webview --collect-all pypdfium2 --collect-all pypdfium2_raw --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx --name ОСЭК-Remastered --icon assets/icon.ico --add-data "web:web" --add-data "assets/icon.png:assets" --add-data "sdo_reborn/install_update.ps1:sdo_reborn" --collect-all webview --collect-all pypdfium2 --collect-all pypdfium2_raw --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path -LiteralPath 'dist/ОСЭК-Remastered/ОСЭК-Remastered.exe')) { throw 'Executable missing' }
           Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/ОСЭК-Remastered/ОСЭК-Remastered.exe' | ForEach-Object { "$($_.Hash.ToLower())  ОСЭК-Remastered.exe" } | Set-Content -Encoding utf8 'dist/SHA256.txt'

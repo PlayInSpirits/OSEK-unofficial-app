@@ -16,13 +16,13 @@ from .client import SDOClient, SDOError
 from .diagnostic_log import logger, setup_logging, LOG_DIR, LOG_FILE
 from .sections import StudentSections
 from .documents import StudentFiles
-from .updates import check_release, RELEASE_INTERVAL
+from .updates import acknowledge_restart, check_release, stage_update, RELEASE_INTERVAL, UPDATE_FAILURE, UpdateError
 
 
 SERVICE = "SDO-Reborn"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 MUTED_NOTIFICATIONS = LOG_DIR / "notifications-muted"
-NOTIFIED_VERSION = LOG_DIR / "notified-version.txt"
+HIDE_UPDATE_PROMPTS = LOG_DIR / "hide-update-prompts"
 
 
 def resource_path(name: str) -> Path:
@@ -42,7 +42,7 @@ class Bridge:
         "search_people", "send_to_user", "mark_conversation_read", "mark_notification_read",
         "recordings", "activity_pick", "activity_submit", "app_version", "check_for_update",
         "logout", "settings", "set_autostart", "set_notification_sounds", "course_progress",
-        "window_command",
+        "window_command", "refresh_update", "dismiss_update_prompts", "install_update", "update_progress",
     )
 
     def __dir__(self):
@@ -63,6 +63,9 @@ class Bridge:
         self._stop = threading.Event()
         self._installed_version = int(resource_path("web/version.txt").read_text(encoding="ascii").strip())
         self._release_status = {"ok": False}
+        self._release_check_lock = threading.Lock()
+        self._install_lock = threading.Lock()
+        self._update_progress = {"phase": "idle"}
 
     def bootstrap(self):
         try:
@@ -95,7 +98,60 @@ class Bridge:
         self.window.evaluate_js("window.setWindowMaximized(false)")
 
     def check_for_update(self):
-        return self._release_status
+        result = self._release_status
+        try:
+            failure = UPDATE_FAILURE.read_text(encoding="utf-8")
+        except OSError:
+            failure = ""
+        return {
+            "ok": result["ok"], "version": result.get("version"), "name": result.get("name"),
+            "url": result.get("url"), "automatic": bool(getattr(sys, "frozen", False) and result.get("sha256")),
+            "prompts": not HIDE_UPDATE_PROMPTS.exists() and not failure, "failure": failure,
+        }
+
+    def refresh_update(self):
+        with self._release_check_lock:
+            result = check_release(self._installed_version)
+            if result["ok"]:
+                self._release_status = result
+        return {"ok": result["ok"]}
+
+    def dismiss_update_prompts(self):
+        try:
+            HIDE_UPDATE_PROMPTS.touch()
+            return {"ok": True}
+        except OSError:
+            return {"ok": False}
+
+    def update_progress(self):
+        return self._update_progress
+
+    def install_update(self):
+        release = self._release_status
+        if not getattr(sys, "frozen", False) or not release.get("sha256") or not release.get("version"):
+            return {"ok": False, "error": "Автоматическая установка этой версии недоступна."}
+        if not self._install_lock.acquire(blocking=False):
+            return {"ok": False, "error": "Обновление уже выполняется."}
+        self._update_progress = {"phase": "download", "received": 0, "total": release["size"]}
+
+        def on_progress(received, total):
+            self._update_progress = {"phase": "download", "received": received, "total": total}
+
+        def install():
+            try:
+                stage_update(release, Path(sys.executable), resource_path("sdo_reborn/install_update.ps1"), on_progress)
+            except Exception as error:
+                logger.warning("update_install_failed type=%s", type(error).__name__)
+                message = str(error) if isinstance(error, UpdateError) else "Не удалось скачать или распаковать обновление. Проверьте подключение и права записи в папку приложения."
+                self._update_progress = {"phase": "error", "error": message}
+                self._install_lock.release()
+                return
+            self._update_progress = {"phase": "restart"}
+            time.sleep(0.65)
+            self._quit()
+
+        threading.Thread(target=install, daemon=True).start()
+        return {"ok": True}
 
     def resume(self):
         logger.info("auth_resume_start")
@@ -426,20 +482,9 @@ class Bridge:
         return delivered
 
     def _release_background(self):
-        try:
-            notified = int(NOTIFIED_VERSION.read_text(encoding="ascii"))
-        except (OSError, ValueError):
-            notified = 0
         while not self._stop.is_set():
             try:
-                result = check_release(self._installed_version)
-                if result["ok"]:
-                    self._release_status = result
-                    version = result["version"]
-                    if version and version > notified:
-                        if self._notify(f"Доступна новая версия v0.{version}", "SystemAsterisk"):
-                            notified = version
-                            NOTIFIED_VERSION.write_text(str(version), encoding="ascii")
+                self.refresh_update()
             except Exception as error:
                 logger.warning("release_poll_failed type=%s", type(error).__name__)
             if self._stop.wait(RELEASE_INTERVAL):
@@ -492,6 +537,7 @@ def main():
     window.events.closing += bridge._closing
     window.events.maximized += bridge._window_maximized
     window.events.restored += bridge._window_restored
+    window.events.loaded += lambda: acknowledge_restart(Path(sys.executable))
 
     def startup():
         bridge._start_tray()

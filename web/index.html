@@ -35,18 +35,24 @@
     <header class="app-header">
       <div class="app-brand pywebview-drag-region"><img class="brand-icon" src="icon.png" alt="">ОСЭК</div>
       <nav class="app-nav" aria-label="Разделы">
-        <button class="nav active" type="button" data-page="home">Главная</button>
+        <button class="nav home-shortcut active" type="button" data-page="home">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 11 10-8 10 8M5 10v11h5v-6h4v6h5V10"/></svg>
+          Главная
+        </button>
         <details class="nav-group">
-          <summary>Мои программы</summary>
+          <summary><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5"/></svg>Мои программы</summary>
           <div class="nav-popover">
             <button class="nav" type="button" data-page="curriculum" data-program>Учебный план</button>
             <button class="nav" type="button" data-section="schedule" data-program>Учебный график</button>
             <button class="nav" type="button" data-section="grades" data-program>Зачётная книжка</button>
           </div>
         </details>
-        <button class="nav" type="button" data-page="courses">Курсы</button>
+        <button class="nav" type="button" data-page="courses">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6c-3-2-6-3-10-2v15c4-1 7 0 10 2 3-2 6-3 10-2V4c-4-1-7 0-10 2Zm0 0v15"/></svg>
+          Курсы
+        </button>
         <details class="nav-group">
-          <summary>Колледж</summary>
+          <summary><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 9 12 3l10 6H2Zm2 11h16M6 12v5m4-5v5m4-5v5m4-5v5M2 22h20"/></svg>Колледж</summary>
           <div class="nav-popover">
             <button class="nav" type="button" data-section="library">Вебинары</button>
             <button class="nav" type="button" data-section="news">Новости</button>
@@ -65,7 +71,7 @@
           <span id="count-notifications" class="quick-count hidden"></span>
         </button>
         <details class="nav-group account-menu">
-          <summary><span id="account-avatar" class="avatar" aria-hidden="true"></span><span class="account-label"><strong id="account-name">Студент</strong><small>Неофициальный клиент ОСЭК</small></span></summary>
+          <summary><span id="account-avatar" class="avatar" aria-hidden="true"></span><span class="account-label"><strong id="account-name">Студент</strong></span></summary>
           <div class="nav-popover">
             <button class="nav" type="button" data-section="profile">Профиль</button>
             <button class="nav" type="button" data-page="settings">Настройки</button>
@@ -163,14 +169,32 @@
           </div>
         </div>
       </section>
-      <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><label class="setting"><span><strong>Тёмная тема</strong><small>Оформление интерфейса</small></span><input id="dark-theme" type="checkbox" checked></label><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Новые версии, сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div><div class="setting"><span><strong>Журнал диагностики</strong><small id="log-path">Загрузка пути…</small></span></div></div><p class="muted note">Журнал записывает переходы и ошибки без пароля и текста сообщений.</p></section>
+      <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><label class="setting"><span><strong>Тёмная тема</strong><small>Оформление интерфейса</small></span><input id="dark-theme" type="checkbox" checked></label><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting update-setting">
+          <div><strong>Обновление приложения</strong><small id="settings-update-status" aria-live="polite">Проверяю наличие обновлений…</small>
+            <progress id="settings-update-progress" class="hidden" max="100" aria-label="Ход скачивания обновления"></progress></div>
+          <div class="update-actions">
+            <button id="check-update" type="button" class="ghost">Проверить</button>
+            <button id="settings-install-update" type="button" class="primary hidden">Обновить</button>
+            <a id="settings-manual-update" class="internal-link hidden" target="_blank" rel="noopener">Страница релиза</a>
+          </div>
+        </div><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div><div class="setting"><span><strong>Журнал диагностики</strong><small id="log-path">Загрузка пути…</small></span></div></div><p class="muted note">Журнал записывает переходы и ошибки без пароля и текста сообщений.</p></section>
     </main>
   </div>
   <footer class="release-footer" aria-label="Версия приложения">
-    <a id="update-link" class="hidden" target="_blank" rel="noopener">Доступна новая версия. Скачать</a>
-    <button id="refresh" class="ghost hidden" type="button">↻ Обновить</button>
+    <span id="client-caption" class="client-caption hidden">Неофициальный клиент ОСЭК</span>
     <span id="app-version"></span>
   </footer>
+  <dialog id="update-dialog" class="update-dialog" aria-labelledby="update-heading">
+    <button id="update-close" class="update-close" type="button" aria-label="Закрыть окно обновления">×</button>
+    <h2 id="update-heading">Доступно обновление</h2>
+    <p id="update-release-name" class="update-release-name"></p>
+    <p id="update-dialog-status" aria-live="polite">Скачать и установить новую версию?</p>
+    <progress id="dialog-update-progress" class="hidden" max="100" aria-label="Ход скачивания обновления"></progress>
+    <div class="update-actions">
+      <button id="dialog-install-update" type="button" class="primary">Обновить</button>
+      <button id="never-prompt-update" type="button" class="ghost">Больше не показывать</button>
+    </div>
+  </dialog>
   <script src="app.js"></script>
 </body>
 </html>

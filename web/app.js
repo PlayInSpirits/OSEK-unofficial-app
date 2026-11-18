@@ -616,7 +616,7 @@ function render() {
     card.addEventListener('click', () => openCourse(course));
     cards.append(card);
   }
-  if (!model.courses.length) empty(cards, 'Курсы не найдены. Нажмите «Обновить».');
+  if (!model.courses.length) empty(cards, 'СДО не вернула список курсов.');
 }
 
 function closeNavigation(except = null) {
@@ -667,7 +667,7 @@ async function loadHomePlan() {
     plan.replaceChildren();
     for (const item of result.items) {
       const row = element('div', 'home-plan-row');
-      row.append(element('strong', '', item.title));
+      row.append(internalLink(item.title, () => openCurriculumCourse(item)));
       const details = [item.teacher, item.hours, item.control].filter(Boolean);
       if (details.length) row.append(element('small', '', details.join(' · ')));
       plan.append(row);
@@ -749,8 +749,32 @@ function eventDay(item) {
 
 function renderMiniEvents() {
   const events = selectedDayEvents ?? model.events.filter(item => eventDay(item) === dayKey(selectedDay));
-  renderItems($('mini-events'), events, 'event');
-  if (!events.length) empty($('mini-events'), 'На этот день в СДО нет событий.');
+  const list = $('mini-events');
+  list.replaceChildren();
+  if (!events.length) {
+    empty(list, 'На этот день в СДО нет событий.');
+    return;
+  }
+  for (const item of events) {
+    const row = element('div', 'item');
+    const body = element('div', 'item-body');
+    const times = String(item.when || '').match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/g);
+    const time = times?.slice(0, 2).join(' – ') || item.when;
+    if (time) body.append(element('small', 'event-time', time));
+
+    // Moodle webinar titles carry these abbreviations when the college specifies a lesson type.
+    const suffix = item.title.match(/\s+\((лк|пз|семинар)\s*(\d*)\)\s*$/i);
+    const labels = {лк: 'Лекция', пз: 'Практическое занятие', семинар: 'Семинар'};
+    const title = suffix ? item.title.slice(0, suffix.index) : item.title;
+    if (item.id) body.append(internalLink(title, () => openReader('event', item.title, String(item.id))));
+    else body.append(element('strong', '', title));
+    if (suffix) {
+      const label = labels[suffix[1].toLowerCase()];
+      body.append(element('small', 'event-lesson-type', suffix[2] ? `${label} ${suffix[2]}` : label));
+    }
+    row.append(body);
+    list.append(row);
+  }
 }
 
 function renderMiniCalendar() {
@@ -798,6 +822,11 @@ async function loadMiniDay(date, focus = false) {
   } catch (error) {
     if (version === dayVersion) empty($('mini-events'), error.message);
   }
+}
+
+function openCurriculumCourse(item) {
+  const url = new URL(item.url);
+  openCourse({id: url.searchParams.get('id'), title: item.title, url: url.href});
 }
 
 function openCourse(course) {
@@ -855,33 +884,10 @@ async function loadCurriculum(selectedProgram = '') {
     if (item.hours) card.append(element('small', '', 'Часы: ' + item.hours));
     if (item.control) card.append(element('small', '', 'Форма контроля: ' + item.control));
     if (item.grade) card.append(element('small', '', item.grade));
-    card.addEventListener('click', () => {
-      const course = model.courses.find(course => new URL(course.url).searchParams.get('id') === new URL(item.url).searchParams.get('id'));
-      openCourse(course || {id: new URL(item.url).searchParams.get('id'), title: item.title, url: item.url});
-    });
+    card.addEventListener('click', () => openCurriculumCourse(item));
     list.append(card);
   }
   if (!result.items.length) empty(list, 'Учебный план пока недоступен.');
-}
-async function refresh() {
-  showMessage('');
-  const account = accountVersion;
-  const button = $('refresh');
-  button.disabled = true;
-  try {
-    const result = await window.pywebview.api.refresh();
-    if (account !== accountVersion) return;
-    if (!result.ok) throw Error(result.error || 'Не удалось обновить данные');
-    model = result.data;
-    progressCache.clear();
-    render();
-    loadMiniDay(selectedDay);
-    loadHomePlan();
-  } catch (error) {
-    if (account === accountVersion) showMessage(error.message);
-  } finally {
-    button.disabled = false;
-  }
 }
 function signedIn(result) {
   ++accountVersion;
@@ -892,7 +898,7 @@ function signedIn(result) {
   $('account-name').textContent = initials.length ? [surname, initials.join('')].join(' ') : name;
   $('account-name').title = name;
   $('account-avatar').textContent = (personal || name).charAt(0).toUpperCase();
-  $('refresh').classList.remove('hidden');
+  $('client-caption').classList.remove('hidden');
   $('login').classList.add('hidden'); $('app').classList.remove('hidden');
   $('password').value = '';
   render();
@@ -913,7 +919,7 @@ async function loadAccountAvatar(version) {
   $('account-avatar').replaceChildren(image);
 }
 async function init() {
-  showReleaseStatus();
+  showReleaseStatus().catch(() => logAction('ui_error', 'release_status_failed'));
   const result = await window.pywebview.api.bootstrap();
   $('username').value = result.username || '';
   if (result.saved) {
@@ -929,24 +935,135 @@ async function init() {
   $('log-path').textContent = await window.pywebview.api.get_log_path();
 }
 
+const updateDialog = $('update-dialog');
+let updateBusy = false;
+let updateResult = null;
+let promptedUpdate = null;
+let releasePaintGeneration = 0;
+
+function paintUpdateProgress(progress) {
+  for (const id of ['settings-update-progress', 'dialog-update-progress']) {
+    const bar = $(id);
+    bar.classList.toggle('hidden', !progress);
+    if (progress) bar.value = progress.phase === 'restart' ? 100 : Math.floor(100 * progress.received / progress.total);
+  }
+}
+
+function paintRelease(result) {
+  updateResult = result;
+  const version = result.version ? `v0.${result.version}` : '';
+  const label = result.name || version;
+  $('settings-update-status').textContent = result.failure || (version
+    ? `Доступно обновление ${label}${label.includes(version) ? '' : ' · ' + version}`
+    : result.ok ? 'Установлена актуальная версия.' : 'Проверяю наличие обновлений…');
+  $('settings-install-update').classList.toggle('hidden', !result.automatic);
+  $('dialog-install-update').classList.toggle('hidden', !result.automatic);
+  const fallback = $('settings-manual-update');
+  fallback.classList.toggle('hidden', !result.url || result.automatic);
+  if (result.url) fallback.href = result.url;
+  else fallback.removeAttribute('href');
+  if (!version && updateDialog.open) updateDialog.close();
+  if (version && result.prompts && promptedUpdate !== version && document.visibilityState === 'visible') {
+    promptedUpdate = version;
+    $('update-release-name').textContent = label;
+    $('update-dialog-status').textContent = result.automatic
+      ? 'Скачать и установить новую версию?' : 'Скачивание доступно со страницы релиза в Настройках.';
+    if (!updateDialog.open) updateDialog.showModal();
+  }
+}
+
+async function refreshUpdateDisplay() {
+  if (updateBusy) return;
+  const generation = ++releasePaintGeneration;
+  const result = await window.pywebview.api.check_for_update();
+  if (!updateBusy && generation === releasePaintGeneration &&
+      (result.failure || !updateResult || JSON.stringify(result) !== JSON.stringify(updateResult) ||
+       result.prompts && result.version && promptedUpdate !== `v0.${result.version}`)) {
+    paintRelease(result);
+  }
+}
+
 async function showReleaseStatus() {
   const api = window.pywebview.api;
   $('app-version').textContent = await api.app_version();
-  async function check() {
-    const result = await api.check_for_update();
-    if (!result.ok) return;
-    const link = $('update-link');
-    if (result.url) link.href = result.url;
-    else link.removeAttribute('href');
-    link.classList.toggle('hidden', !result.url);
-  }
-  const refreshPreview = () => check().catch(() => logAction('ui_error', 'preview_check_failed'));
-  refreshPreview();
-  window.setInterval(refreshPreview, 10 * 1000);
+  const refresh = () => refreshUpdateDisplay().catch(() => logAction('ui_error', 'release_status_failed'));
+  refresh();
+  window.setInterval(refresh, 5000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') refreshPreview();
+    if (document.visibilityState === 'visible') refresh();
   });
 }
+
+$('check-update').addEventListener('click', async () => {
+  const button = $('check-update');
+  button.disabled = true;
+  $('settings-update-status').textContent = 'Проверяю наличие обновлений…';
+  try {
+    const result = await window.pywebview.api.refresh_update();
+    if (!result.ok) throw Error('Не удалось проверить наличие обновлений.');
+    if (!updateBusy) paintRelease(await window.pywebview.api.check_for_update());
+  } catch (error) {
+    if (!updateBusy) $('settings-update-status').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('update-close').addEventListener('click', () => updateDialog.close());
+$('never-prompt-update').addEventListener('click', async () => {
+  const button = $('never-prompt-update');
+  button.disabled = true;
+  try {
+    const result = await window.pywebview.api.dismiss_update_prompts();
+    if (!result.ok) throw Error('Не удалось сохранить настройку уведомлений.');
+    updateDialog.close();
+  } catch (error) {
+    $('update-dialog-status').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+updateDialog.addEventListener('cancel', event => {
+  if (updateBusy) event.preventDefault();
+});
+
+async function installAvailableUpdate() {
+  if (updateBusy) return;
+  updateBusy = true;
+  const actions = ['settings-install-update', 'dialog-install-update', 'never-prompt-update', 'update-close'];
+  actions.forEach(id => { $(id).disabled = true; });
+  const status = text => {
+    $('settings-update-status').textContent = text;
+    $('update-dialog-status').textContent = text;
+  };
+  try {
+    const api = window.pywebview.api;
+    const result = await api.install_update();
+    if (!result.ok) throw Error(result.error);
+    for (;;) {
+      const progress = await api.update_progress();
+      if (progress.phase === 'error') throw Error(progress.error);
+      if (progress.phase !== 'idle') {
+        paintUpdateProgress(progress);
+        if (progress.phase === 'restart') {
+          status('Обновление скачано. Устанавливаю и перезапускаю приложение…');
+          return;
+        }
+        const percent = Math.floor(100 * progress.received / progress.total);
+        status(percent >= 100 ? 'Проверяю и распаковываю обновление…' : `Скачиваю обновление · ${percent}%`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 240));
+    }
+  } catch (error) {
+    updateBusy = false;
+    paintUpdateProgress(null);
+    status(error.message || 'Не удалось установить обновление.');
+    actions.forEach(id => { $(id).disabled = false; });
+  }
+}
+$('dialog-install-update').addEventListener('click', installAvailableUpdate);
+$('settings-install-update').addEventListener('click', installAvailableUpdate);
+
 for (const group of navGroups) {
   group.querySelector('summary').addEventListener('click', () => closeNavigation(group));
 }
@@ -1019,7 +1136,6 @@ $('login-form').addEventListener('submit', async event => {
   if (result.ok) { $('login-status').textContent = ''; signedIn(result); }
   else $('login-status').textContent = result.error || 'Не удалось войти';
 });
-$('refresh').addEventListener('click', refresh);
 $('logout').addEventListener('click', async () => {
   await window.pywebview.api.logout();
   ++resourceVersion;
@@ -1038,7 +1154,7 @@ $('logout').addEventListener('click', async () => {
   $('nav-program').replaceChildren();
   $('nav-program-label').classList.add('hidden');
   showProgramName();
-  $('refresh').classList.add('hidden');
+  $('client-caption').classList.add('hidden');
   programRequest = null;
   $('curriculum-program').replaceChildren();
   $('resource-program').replaceChildren();
