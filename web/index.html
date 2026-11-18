@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; script-src 'self'; style-src 'self'; img-src 'self' data: https://sdo.i-spo.ru https://sdo.vgaps.ru; media-src https://sdo.i-spo.ru https://media2.sdo.support; connect-src 'none'; form-action 'none'">
+  <title>ОСЭК-Remastered</title>
+  <link rel="icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="window-controls" aria-label="Управление окном">
+    <button id="window-minimize" type="button" aria-label="Свернуть" title="Свернуть">−</button>
+    <button id="window-maximize" type="button" aria-label="Развернуть" title="Развернуть">□</button>
+    <button id="window-close" type="button" aria-label="Закрыть" title="Закрыть">×</button>
+  </div>
+  <div id="login" class="login-screen"><div class="login-drag pywebview-drag-region" aria-hidden="true"></div>
+    <div class="login-card">
+      <img class="app-icon" src="icon.png" alt="ОСЭК">
+      <p class="eyebrow">Колледж · ОСЭК</p>
+      <h1>Ваши знания в одном месте.</h1>
+      <p class="muted">Пароль хранится локально на вашем компьютере в диспетчере учётных данных Windows.</p>
+      <div id="resume-state" class="resume-state hidden"><span class="spinner"></span><span>Подключаюсь к sdo.i-spo.ru</span></div>
+      <form id="login-form">
+        <label for="username">Логин</label><input id="username" autocomplete="username" required>
+        <label for="password">Пароль</label><input id="password" type="password" autocomplete="current-password" required>
+        <button type="submit" class="primary full">Войти</button>
+      </form>
+      <p id="login-status" class="status" role="status"></p>
+      <small>Неофициальный клиент · Данные входа остаются на этом компьютере</small>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="app-header">
+      <div class="app-brand pywebview-drag-region"><img class="brand-icon" src="icon.png" alt="">ОСЭК</div>
+      <nav class="app-nav" aria-label="Разделы">
+        <button class="nav active" type="button" data-page="home">Главная</button>
+        <details class="nav-group">
+          <summary>Мои программы</summary>
+          <div class="nav-popover">
+            <button class="nav" type="button" data-page="curriculum" data-program>Учебный план</button>
+            <button class="nav" type="button" data-section="schedule" data-program>Учебный график</button>
+            <button class="nav" type="button" data-section="grades" data-program>Зачётная книжка</button>
+          </div>
+        </details>
+        <button class="nav" type="button" data-page="courses">Курсы</button>
+        <details class="nav-group">
+          <summary>Колледж</summary>
+          <div class="nav-popover">
+            <button class="nav" type="button" data-section="library">Вебинары</button>
+            <button class="nav" type="button" data-section="news">Новости</button>
+            <button class="nav" type="button" data-section="official">Официальные уведомления</button>
+            <button class="nav" type="button" data-section="documents">Документы и платежи</button>
+          </div>
+        </details>
+      </nav>
+      <div class="window-drag pywebview-drag-region" aria-hidden="true"></div>
+      <div class="account-actions">
+        <button class="nav quick-icon" type="button" data-page="messages" aria-label="Сообщения" title="Сообщения">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19l3-3h11a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v13z"/></svg>
+        </button>
+        <button class="nav quick-icon" type="button" data-page="notifications" aria-label="Уведомления СДО" title="Уведомления СДО">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+          <span id="count-notifications" class="quick-count hidden"></span>
+        </button>
+        <details class="nav-group account-menu">
+          <summary><span id="account-avatar" class="avatar" aria-hidden="true"></span><span class="account-label"><strong id="account-name">Студент</strong><small>Неофициальный клиент ОСЭК</small></span></summary>
+          <div class="nav-popover">
+            <button class="nav" type="button" data-section="profile">Профиль</button>
+            <button class="nav" type="button" data-page="settings">Настройки</button>
+          </div>
+        </details>
+      </div>
+    </header>
+    <main class="content">
+      <div id="message" class="message hidden" role="status"></div>
+      <section id="page-home" class="page">
+        <div class="dashboard">
+          <div class="dashboard-study">
+            <section class="study-hero">
+              <h1>Моя учёба</h1>
+              <p id="home-program-name" class="hidden"></p>
+            </section>
+            <div class="dashboard-cards">
+              <section class="panel">
+                <h2>Мои программы</h2>
+                <label id="nav-program-label" class="nav-program hidden"><span class="visually-hidden">Учебная программа</span><select id="nav-program"></select></label>
+                <p id="home-program-status" class="muted" role="status"></p>
+              </section>
+              <section class="panel">
+                <h2 id="home-deadline-heading">Сроки заданий</h2>
+                <div id="home-deadlines" class="list dashboard-scroll" tabindex="0" role="region" aria-labelledby="home-deadline-heading"></div>
+              </section>
+              <section class="panel">
+                <h2 id="home-progress-heading">Прогресс обучения</h2>
+                <div id="home-progress" class="progress-list dashboard-scroll" tabindex="0" role="region" aria-labelledby="home-progress-heading"></div>
+              </section>
+              <section class="panel">
+                <h2 id="home-plan-heading">Учебный план</h2>
+                <div id="home-plan" class="dashboard-scroll" tabindex="0" role="region" aria-labelledby="home-plan-heading"></div>
+              </section>
+            </div>
+          </div>
+          <section class="panel dashboard-calendar">
+            <h2>Календарь</h2>
+            <div class="mini-calendar-month">
+              <button id="month-prev" class="ghost" type="button" aria-label="Предыдущий месяц">‹</button>
+              <strong id="month-label"></strong>
+              <button id="month-next" class="ghost" type="button" aria-label="Следующий месяц">›</button>
+            </div>
+            <div class="mini-calendar-grid mini-weekdays" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+            <div id="mini-days" class="mini-calendar-grid"></div>
+            <div id="mini-events" class="list dashboard-scroll" tabindex="0" role="region" aria-label="События выбранного дня" aria-live="polite"></div>
+          </section>
+        </div>
+      </section>
+      <section id="page-courses" class="page hidden"><div class="heading"><p class="eyebrow">ОБУЧЕНИЕ</p><h1>Ваши курсы</h1><p class="muted">Откройте курс, чтобы увидеть все доступные темы и материалы.</p></div><div id="courses-list" class="course-grid"></div></section>
+      <section id="page-curriculum" class="page hidden">
+        <div class="heading resource-heading">
+          <h1>Предметы и преподаватели</h1>
+          <label>Учебная программа <select id="curriculum-program"></select></label>
+        </div>
+        <div id="curriculum-list" class="course-grid"></div>
+      </section>
+      <section id="page-course" class="page hidden">
+        <div class="heading"><button id="course-back" class="ghost" type="button">← Назад</button><h1 id="course-heading">Курс</h1></div>
+        <div class="panel"><div id="assignment-list" class="list"></div></div>
+      </section>
+      <section id="page-notifications" class="page hidden"><div class="heading"><p class="eyebrow">НОВОЕ</p><h1>Уведомления</h1><p class="muted">Последние сообщения системы.</p></div><div class="panel"><div id="notifications-list" class="list"></div></div></section>
+      <section id="page-resources" class="page hidden">
+        <div class="heading resource-heading">
+          <div><h1 id="resource-title"></h1></div>
+          <label id="resource-program-label" class="hidden">Учебная программа <select id="resource-program"></select></label>
+        </div>
+        <p id="resource-status" class="muted" role="status"></p>
+        <div id="resource-content" class="resource-content"></div>
+      </section>
+      <section id="page-reader" class="page reader hidden">
+        <button id="reader-back" type="button" class="ghost">← Назад</button>
+        <h1 id="reader-title"></h1>
+        <p id="reader-status" class="muted" role="status"></p>
+        <div id="reader-content" class="resource-content"></div>
+      </section>
+      <section id="page-messages" class="page hidden">
+        <div class="heading"><h1>Сообщения</h1></div>
+        <div class="messages-layout">
+          <div class="panel conversation-list">
+            <form id="people-search-form" class="people-search">
+              <input id="people-search-input" type="search" minlength="2" maxlength="120" required placeholder="Имя или фамилия" aria-label="Имя или фамилия собеседника">
+              <button type="submit" class="ghost">Найти</button>
+            </form>
+            <button id="back-to-conversations" class="ghost hidden" type="button">← Мои переписки</button>
+            <div id="conversation-list" aria-live="polite"><p class="empty">Загружаю переписки…</p></div>
+          </div>
+          <div class="panel conversation-panel">
+            <h2 id="conversation-title">Выберите переписку</h2>
+            <div id="conversation-messages" class="conversation-messages"></div>
+            <form id="message-form" class="message-form hidden">
+              <input id="message-text" maxlength="10000" placeholder="Написать сообщение…" aria-label="Текст сообщения">
+              <button class="primary" type="submit">Отправить</button>
+            </form>
+          </div>
+        </div>
+      </section>
+      <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><label class="setting"><span><strong>Тёмная тема</strong><small>Оформление интерфейса</small></span><input id="dark-theme" type="checkbox" checked></label><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Новые версии, сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div><div class="setting"><span><strong>Журнал диагностики</strong><small id="log-path">Загрузка пути…</small></span></div></div><p class="muted note">Журнал записывает переходы и ошибки без пароля и текста сообщений.</p></section>
+    </main>
+  </div>
+  <footer class="release-footer" aria-label="Версия приложения">
+    <a id="update-link" class="hidden" target="_blank" rel="noopener">Доступна новая версия. Скачать</a>
+    <button id="refresh" class="ghost hidden" type="button">↻ Обновить</button>
+    <span id="app-version"></span>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>
