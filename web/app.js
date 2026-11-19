@@ -19,6 +19,14 @@ const imageObserver = new IntersectionObserver(entries => {
     loadCourseImage(image);
   }
 }, {rootMargin: '250px'});
+
+function teacherPhoto(url, className = 'teacher-avatar') {
+  const image = element('img', className);
+  image.alt = '';
+  image.dataset.sdoImage = url;
+  imageObserver.observe(image);
+  return image;
+}
 const sectionTitles = {
   documents: 'Документы и платежи',
   schedule: 'Учебный график',
@@ -266,12 +274,12 @@ function openMaterial(url, title) {
   openReader(isPDF ? 'pdf' : 'material', title, url);
 }
 
-function openReader(section, title, url) {
+function openReader(section, title, url, avatar = '') {
   const current = document.querySelector('.page:not(.hidden)');
   const previous = readerHistory.at(-1);
   if (previous) previous.scroll = document.querySelector('main.content').scrollTop;
   readerHistory.push({
-    section, title, url,
+    section, title, url, avatar,
     returnPage: current.id.slice(5),
     returnScroll: document.querySelector('main.content').scrollTop,
     scroll: 0, pdfIndex: 0,
@@ -310,22 +318,47 @@ function paintReader(data, reading) {
   if (data.title) $('reader-title').textContent = data.title;
   if (data.url) reading.url = data.url;
   if (data.contact) {
-    renderTeacher(data.contact, content);
+    renderTeacher(data.contact, content, reading.avatar);
   } else if (data.events) {
     const list = element('div', 'panel list');
     renderItems(list, data.events, 'event');
     content.append(list);
   } else {
     appendBlocks(content, data.blocks);
+    if (typeof data.subscription === 'boolean') {
+      const panel = element('div', 'panel resource-block');
+      const button = element('button', 'primary', data.subscription ? 'Отписаться' : 'Подписаться');
+      const status = element('p', 'muted');
+      status.setAttribute('role', 'status');
+      let subscribed = data.subscription;
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          const result = await window.pywebview.api.set_meeting_subscription(reading.url, !subscribed);
+          if (!result.ok) throw Error(result.error);
+          subscribed = result.data.subscribed;
+          button.textContent = subscribed ? 'Отписаться' : 'Подписаться';
+          status.textContent = subscribed ? 'Подписка подтверждена СДО.' : 'Подписка отменена.';
+        } catch (error) {
+          status.textContent = error.message;
+        } finally {
+          button.disabled = false;
+        }
+      });
+      panel.append(button, status);
+      content.append(panel);
+    }
     for (const form of data.forms || []) content.append(renderActivityForm(form, reading));
     if (!data.blocks.length && !data.forms?.length) empty(content, 'СДО не вернула подробности.');
   }
 }
 
-function renderTeacher(contact, parent) {
+function renderTeacher(contact, parent, fallbackAvatar) {
   const form = element('form', 'panel resource-block activity-form');
+  const avatarUrl = contact.avatar || fallbackAvatar;
+  if (avatarUrl) form.append(teacherPhoto(avatarUrl));
   form.append(element('h2', '', contact.name));
-  const open = internalLink('Открыть переписку', () => {
+  const open = internalLink(contact.canMessage ? 'Написать сообщение' : 'Открыть переписку', () => {
     showPage('messages');
     openConversation(contact);
   });
@@ -358,6 +391,11 @@ function renderTeacher(contact, parent) {
     });
   }
   parent.append(form);
+}
+
+function curriculumTeacher(item) {
+  if (!item.teacher_url) return element('span', '', item.teacher);
+  return internalLink(item.teacher, () => openReader('teacher', item.teacher, item.teacher_url, item.teacher_avatar));
 }
 
 function makeActivityWidget(widget) {
@@ -668,8 +706,13 @@ async function loadHomePlan() {
     for (const item of result.items) {
       const row = element('div', 'home-plan-row');
       row.append(internalLink(item.title, () => openCurriculumCourse(item)));
-      const details = [item.teacher, item.hours, item.control].filter(Boolean);
-      if (details.length) row.append(element('small', '', details.join(' · ')));
+      const details = [item.hours, item.control].filter(Boolean);
+      if (item.teacher || details.length) {
+        const line = element('small');
+        if (item.teacher) line.append(curriculumTeacher(item));
+        if (details.length) line.append((item.teacher ? ' · ' : '') + details.join(' · '));
+        row.append(line);
+      }
       plan.append(row);
     }
     if (!result.items.length) empty(plan, 'СДО не показала дисциплины для этой программы.');
@@ -878,13 +921,19 @@ async function loadCurriculum(selectedProgram = '') {
   curriculumLoaded = program;
   list.replaceChildren();
   for (const item of result.items) {
-    const card = element('button', 'course-card curriculum-card');
-    card.append(element('div', 'course-mark', '◈'), element('strong', '', item.title));
-    if (item.teacher) card.append(element('p', '', 'Преподаватель: ' + item.teacher));
+    const card = element('article', 'course-card curriculum-card');
+    const mark = item.teacher_avatar
+      ? teacherPhoto(item.teacher_avatar, 'course-mark teacher-avatar')
+      : element('div', 'course-mark', '◈');
+    card.append(mark, internalLink(item.title, () => openCurriculumCourse(item)));
+    if (item.teacher) {
+      const teacher = element('p', '', 'Преподаватель: ');
+      teacher.append(curriculumTeacher(item));
+      card.append(teacher);
+    }
     if (item.hours) card.append(element('small', '', 'Часы: ' + item.hours));
     if (item.control) card.append(element('small', '', 'Форма контроля: ' + item.control));
     if (item.grade) card.append(element('small', '', item.grade));
-    card.addEventListener('click', () => openCurriculumCourse(item));
     list.append(card);
   }
   if (!result.items.length) empty(list, 'Учебный план пока недоступен.');
@@ -920,6 +969,9 @@ async function loadAccountAvatar(version) {
 }
 async function init() {
   showReleaseStatus().catch(() => logAction('ui_error', 'release_status_failed'));
+  const settings = await window.pywebview.api.settings();
+  applyAppearance(settings.theme);
+  savedAppearance = document.body.dataset.theme;
   const result = await window.pywebview.api.bootstrap();
   $('username').value = result.username || '';
   if (result.saved) {
@@ -929,7 +981,6 @@ async function init() {
     if (resumed.ok) signedIn(resumed);
     else $('login-status').textContent = resumed.error || 'Не удалось войти автоматически';
   }
-  const settings = await window.pywebview.api.settings();
   $('autostart').checked = !!settings.autostart;
   $('notification-sounds').checked = settings.sounds !== false;
   $('log-path').textContent = await window.pywebview.api.get_log_path();
@@ -1138,6 +1189,12 @@ $('login-form').addEventListener('submit', async event => {
 });
 $('logout').addEventListener('click', async () => {
   await window.pywebview.api.logout();
+  chosenDocument = null;
+  renderDocumentInfo();
+  renderDocumentResults();
+  $('document-progress-box').classList.add('hidden');
+  $('document-status').textContent = '';
+  updateDocumentButtons();
   ++resourceVersion;
   ++topicVersion;
   ++conversationListVersion;
@@ -1175,7 +1232,33 @@ $('logout').addEventListener('click', async () => {
   $('username').value = '';
   $('password').value = '';
 });
-$('dark-theme').addEventListener('change', event => document.body.classList.toggle('light', !event.target.checked));
+function applyAppearance(theme) {
+  const safe = ['night', 'cobalt', 'cream', 'pine'].includes(theme) ? theme : 'night';
+  document.body.dataset.theme = safe;
+  document.body.classList.toggle('light', safe === 'cobalt' || safe === 'cream');
+  $('theme-options').querySelector('input[value="' + safe + '"]').checked = true;
+}
+let savedAppearance = 'night';
+$('theme-options').addEventListener('change', async (event) => {
+  const target = event.target;
+  const panel = $('theme-options');
+  const status = $('theme-status');
+  const inputs = [...panel.querySelectorAll('input')];
+  const choice = target.value;
+  applyAppearance(choice);
+  inputs.forEach(input => { input.disabled = true; });
+  status.textContent = '';
+  try {
+    const result = await window.pywebview.api.set_appearance(choice);
+    if (!result.ok) throw Error();
+    savedAppearance = choice;
+  } catch {
+    applyAppearance(savedAppearance);
+    status.textContent = 'Не удалось сохранить тему.';
+  } finally {
+    inputs.forEach(input => { input.disabled = false; });
+  }
+});
 $('autostart').addEventListener('change', async event => { const result = await window.pywebview.api.set_autostart(event.target.checked); if (!result.ok) { event.target.checked = !event.target.checked; showMessage(result.error); } });
 window.setWindowMaximized = maximized => {
   const button = $('window-maximize');
@@ -1301,3 +1384,183 @@ $('message-form').addEventListener('submit', async event => {
     await loadConversations();
   }
 });
+
+const documentGroups = {
+  general: {
+    indexes: [['plumb', 'Plumb Search', 'Публичный индекс сайтов · совпадения в поисковых выдержках.'],
+      ['wiki', 'Википедия', 'Русская или английская Википедия · текст найденных страниц.']],
+    services: [['Text.ru', 'Бесплатная проверка текста с лимитами.', 'https://text.ru/antiplagiat'],
+      ['Advego Plagiatus', 'Бесплатная онлайн-проверка текста; есть отдельная программа.', 'https://advego.com/antiplagiat/'],
+      ['eTXT', 'Есть бесплатная онлайн-проверка с ограничениями.', 'https://www.etxt.ru/antiplagiat/'],
+      ['Content Watch', 'Бесплатная проверка текста без регистрации, с дневным лимитом.', 'https://content-watch.ru/text/'],
+      ['DupliChecker', 'Есть бесплатная проверка текста или файла с лимитом.', 'https://www.duplichecker.com/']],
+  },
+  academic: {
+    indexes: [['doaj', 'DOAJ', 'Открытые научные журналы · совпадения в аннотациях.'],
+      ['wiki', 'Википедия', 'Справочные материалы · текст найденных страниц.']],
+    services: [['Антиплагиат.ру', 'Тариф «Бесплатный»: открытый интернет и краткий отчёт. Требуется аккаунт.', 'https://antiplagiat.ru/'],
+      ['Quetext', 'Бесплатный тариф для коротких текстов. Подходит для проверки фрагмента работы.', 'https://www.quetext.com/'],
+      ['Руконтекст', 'Проверка через учебное заведение по билету преподавателя. Самостоятельная проверка платная.', 'https://text.rucont.ru/'],
+      ['ВКР-ВУЗ.РФ', 'Требуется учётная запись от учебного заведения. Ссылка ведёт на инструкцию вуза.', 'https://kbsu.ru/wp-content/uploads/2016/04/Instruktsiya-dlya-obuchayushhihsya-i-prepodavatelej-na-platforme-VKR-VUZ.-RF.pdf', 'Открыть инструкцию ↗']],
+  },
+};
+let chosenDocument = null;
+let documentBusy = false;
+const documentSize = new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 1});
+const selectedDocumentGroup = () => $('document-groups').querySelector('input:checked').value;
+
+function checkLink(label, url, className='internal-link') {
+  const button = element('button', className, label);
+  button.type = 'button';
+  button.addEventListener('click', async () => {
+    try {
+      const result = await window.pywebview.api.document_open_link(url);
+      if (!result.ok) throw Error();
+    } catch { showMessage('Не удалось открыть ссылку в браузере.'); }
+  });
+  return button;
+}
+
+function renderDocumentResults(results = [], running = false) {
+  const list = $('document-checkers');
+  const {indexes, services} = documentGroups[selectedDocumentGroup()];
+  list.replaceChildren();
+  for (const [id, name, help] of indexes) {
+    const item = element('details', 'panel document-checker');
+    const result = results.find(row => row.id === id);
+    const count = result?.matches.length || 0;
+    const status = result?.checked ? `Совпадения: ${count} из ${result.checked}`
+      : result?.error || (running ? 'Ищу…' : 'Готов к проверке');
+    const summary = element('summary', 'document-check-summary');
+    summary.append(element('strong', '', name), element('span', 'document-badge', status));
+    item.append(summary, element('p', 'muted document-note', help));
+    if (result?.checked) {
+      const meter = element('progress', 'document-meter');
+      meter.max = result.checked;
+      meter.value = count;
+      meter.setAttribute('aria-label', `Фраз с совпадениями: ${count} из ${result.checked}`);
+      item.append(meter);
+      item.append(element('p', 'muted document-note', `Проверено фраз: ${result.checked} из ${result.sampled}.`));
+    }
+    if (result?.error && result.checked) item.append(element('p', 'muted document-note', result.error + '. Показаны частичные результаты.'));
+    for (const match of result?.matches || []) {
+      const row = element('div', 'document-match');
+      row.append(element('blockquote', '', (match.page ? `Стр. ${match.page} · ` : '') + match.text));
+      for (const source of match.sources) row.append(checkLink(source.title, source.url));
+      item.append(row);
+    }
+    item.open = Boolean(count);
+    list.append(item);
+  }
+  const links = $('document-services');
+  links.replaceChildren();
+  for (const [name, help, url, action = 'Открыть в браузере ↗'] of services) {
+    const card = element('article', 'document-service');
+    card.append(element('strong', '', name), element('small', 'muted', help), checkLink(action, url, 'ghost'));
+    links.append(card);
+  }
+}
+
+function updateDocumentButtons() {
+  $('document-pick').disabled = documentBusy;
+  $('document-groups').disabled = documentBusy;
+  $('document-run').disabled = documentBusy || !chosenDocument;
+}
+
+function renderDocumentInfo() {
+  const details = $('document-info');
+  details.replaceChildren();
+  details.classList.toggle('hidden', !chosenDocument);
+  if (!chosenDocument) return;
+  const bytes = chosenDocument.size;
+  const size = bytes < 1024 ? documentSize.format(bytes) + ' Б'
+    : bytes < 1024 * 1024 ? documentSize.format(bytes / 1024) + ' КБ'
+      : documentSize.format(bytes / (1024 * 1024)) + ' МБ';
+  for (const [label, value] of [['Файл', chosenDocument.name], ['Размер', size], ['Путь', chosenDocument.path]]) {
+    details.append(element('dt', 'muted', label), element('dd', '', value));
+  }
+}
+
+async function chooseDocument() {
+  if (documentBusy) return;
+  const account = accountVersion;
+  documentBusy = true;
+  updateDocumentButtons();
+  const status = $('document-status');
+  status.textContent = 'Читаю выбранный файл…';
+  try {
+    const result = await window.pywebview.api.document_pick();
+    if (account !== accountVersion) return;
+    if (!result.ok) throw Error(result.error);
+    status.textContent = '';
+    if (result.cancelled) return;
+    chosenDocument = result.file;
+    renderDocumentInfo();
+    renderDocumentResults();
+    $('document-progress-box').classList.add('hidden');
+  } catch (error) {
+    if (account === accountVersion) status.textContent = chosenDocument ? `${error.message} Предыдущий файл остаётся выбранным.` : error.message;
+  } finally {
+    documentBusy = false;
+    updateDocumentButtons();
+  }
+}
+
+function paintDocumentProgress(percent, label = `${percent}%`) {
+  $('document-progress').value = percent;
+  $('document-count').textContent = label;
+}
+
+$('document-groups').addEventListener('change', () => {
+  $('document-status').textContent = '';
+  $('document-progress-box').classList.add('hidden');
+  renderDocumentResults();
+  updateDocumentButtons();
+});
+$('document-pick').addEventListener('click', chooseDocument);
+async function runDocumentCheck() {
+  if (documentBusy || !chosenDocument) return;
+  const account = accountVersion;
+  documentBusy = true;
+  updateDocumentButtons();
+  const status = $('document-status');
+  status.textContent = '';
+  renderDocumentResults([], true);
+  $('document-progress-box').classList.remove('hidden');
+  paintDocumentProgress(0);
+  const api = window.pywebview.api;
+  let finished = false;
+  let pollBusy = false;
+  const timer = setInterval(async () => {
+    if (pollBusy) return;
+    pollBusy = true;
+    try {
+      const state = await api.document_check_progress();
+      if (!finished && account === accountVersion && state.total) paintDocumentProgress(Math.floor(100 * state.completed / state.total));
+    } catch { clearInterval(timer); }
+    finally { pollBusy = false; }
+  }, 260);
+  try {
+    const result = await api.document_check(selectedDocumentGroup());
+    if (account !== accountVersion) return;
+    if (!result.ok) throw Error(result.error);
+    renderDocumentResults(result.results);
+    const checked = result.results.some(source => source.checked);
+    const partial = result.results.some(source => source.error);
+    paintDocumentProgress(100, checked ? (partial ? 'Завершён с ограничениями' : 'Готово · 100%') : 'Нет результатов');
+  } catch (error) {
+    if (account === accountVersion) {
+      renderDocumentResults();
+      paintDocumentProgress(0, 'Прервано');
+      status.textContent = error.message;
+    }
+  } finally {
+    finished = true;
+    clearInterval(timer);
+    documentBusy = false;
+    updateDocumentButtons();
+  }
+}
+$('document-run').addEventListener('click', runDocumentCheck);
+renderDocumentResults();
+updateDocumentButtons();

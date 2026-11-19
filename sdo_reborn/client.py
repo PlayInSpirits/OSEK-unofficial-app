@@ -252,6 +252,8 @@ class SDOClient:
             if not link:
                 continue
             teacher = card.select_one(".course-teacher-plan-name")
+            teacher_link = teacher.select_one('a[href*="/user/profile.php"]') if teacher else None
+            avatar = card.select_one('img.userpicture[src]')
             hours = card.select_one(".time-span")
             control = card.select_one(".control-div")
             grade = card.select_one(".rate-span")
@@ -259,9 +261,20 @@ class SDOClient:
                 url = safe_url(link.get("href", ""))
             except SDOError:
                 continue
+            teacher_url = ""
+            teacher_avatar = ""
+            try:
+                if teacher_link:
+                    teacher_url = safe_url(teacher_link["href"])
+                if avatar:
+                    teacher_avatar = safe_url(avatar["src"])
+            except SDOError:
+                logger.info("curriculum_teacher_link_unavailable")
             result.append({
                 "title": link.get_text(" ", strip=True),
                 "teacher": teacher.get_text(" ", strip=True) if teacher else "",
+                "teacher_url": teacher_url,
+                "teacher_avatar": teacher_avatar,
                 "hours": hours.get_text(" ", strip=True) if hours else "",
                 "control": control.get_text(" ", strip=True) if control else "",
                 "grade": grade.get_text(" ", strip=True) if grade else "",

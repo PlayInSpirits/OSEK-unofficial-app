@@ -8,7 +8,7 @@
   <link rel="icon" href="icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-theme="night">
   <div class="window-controls" aria-label="Управление окном">
     <button id="window-minimize" type="button" aria-label="Свернуть" title="Свернуть">−</button>
     <button id="window-maximize" type="button" aria-label="Развернуть" title="Развернуть">□</button>
@@ -50,6 +50,9 @@
         <button class="nav" type="button" data-page="courses">
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6c-3-2-6-3-10-2v15c4-1 7 0 10 2 3-2 6-3 10-2V4c-4-1-7 0-10 2Zm0 0v15"/></svg>
           Курсы
+        </button>
+        <button class="nav" type="button" data-page="document-check">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/><path d="m9 12 2 2 4-4"/></svg>Антиплагиат
         </button>
         <details class="nav-group">
           <summary><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 9 12 3l10 6H2Zm2 11h16M6 12v5m4-5v5m4-5v5m4-5v5M2 22h20"/></svg>Колледж</summary>
@@ -169,7 +172,68 @@
           </div>
         </div>
       </section>
-      <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><label class="setting"><span><strong>Тёмная тема</strong><small>Оформление интерфейса</small></span><input id="dark-theme" type="checkbox" checked></label><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting update-setting">
+      <section id="page-document-check" class="page hidden">
+        <div class="heading"><p class="eyebrow">ПОИСК ПО СЕТИ</p><h1>Антиплагиат</h1><p class="muted">Выберите один файл и тип работы, чтобы поискать совпадения в интернете.</p></div>
+        <div class="document-workspace">
+          <div class="panel document-selection">
+            <fieldset class="document-groups" id="document-groups">
+              <legend>Тип работы</legend>
+              <label><input type="radio" name="document-group" value="general" checked><span>Обычные статьи, рефераты и посты</span></label>
+              <label><input type="radio" name="document-group" value="academic"><span>Курсовые, дипломы и научные работы</span></label>
+            </fieldset>
+            <div class="document-file">
+              <div><strong>Документ</strong><small class="muted">TXT, MD, DOCX или PDF с текстовым слоем · до 80 МБ</small></div>
+              <dl id="document-info" class="document-info hidden"></dl>
+              <div class="document-actions">
+                <button id="document-pick" type="button" class="ghost">Выбрать файл</button>
+                <button id="document-run" type="button" class="primary" disabled>Найти совпадения</button>
+              </div>
+            </div>
+            <p class="muted document-note">В поисковики отправится до шести коротких фраз. Сам файл остаётся на компьютере.</p>
+            <p id="document-status" role="status"></p>
+          </div>
+          <div class="document-report">
+            <h2>Результаты поиска</h2>
+            <p class="muted document-note">Отчёт показывает совпадения в выборке и не оценивает оригинальность всего документа.</p>
+            <div id="document-checkers" class="list"></div>
+          </div>
+        </div>
+        <details class="panel document-manual">
+          <summary>Проверить на сайте сервиса</summary>
+          <p class="muted document-note">Сервис откроется в браузере. Текст или файл вы отправляете там самостоятельно; отчёт останется на сайте.</p>
+          <div id="document-services" class="document-services"></div>
+        </details>
+        <div id="document-progress-box" class="panel document-progress hidden">
+          <label for="document-progress">Ход поиска <strong id="document-count"></strong></label>
+          <progress id="document-progress" class="document-meter" max="100" value="0"></progress>
+        </div>
+      </section>
+      <section id="page-settings" class="page hidden"><div class="heading"><p class="eyebrow">ПРИЛОЖЕНИЕ</p><h1>Настройки</h1></div><div class="panel settings"><fieldset class="setting theme-setting"><legend>Оформление</legend><div class="theme-options" id="theme-options">
+        <label class="theme-option" data-theme-option="night">
+          <input type="radio" name="appearance" value="night" checked aria-label="Ночной синий">
+          <span class="theme-preview" aria-hidden="true"><span class="theme-preview-top"><i></i><i></i><i></i></span><span class="theme-preview-main"><i></i><span></span><span></span></span><span class="theme-preview-side"><i></i><i></i><i></i></span></span>
+          <span class="theme-option-label"><strong>Ночной синий</strong><small>Тёмная</small></span>
+          <span class="theme-option-check" aria-hidden="true">✓</span>
+        </label>
+        <label class="theme-option" data-theme-option="cobalt">
+          <input type="radio" name="appearance" value="cobalt" aria-label="Кобальт и белый">
+          <span class="theme-preview" aria-hidden="true"><span class="theme-preview-top"><i></i><i></i><i></i></span><span class="theme-preview-main"><i></i><span></span><span></span></span><span class="theme-preview-side"><i></i><i></i><i></i></span></span>
+          <span class="theme-option-label"><strong>Кобальт и белый</strong><small>Светлая</small></span>
+          <span class="theme-option-check" aria-hidden="true">✓</span>
+        </label>
+        <label class="theme-option" data-theme-option="cream">
+          <input type="radio" name="appearance" value="cream" aria-label="Белый и кремовый">
+          <span class="theme-preview" aria-hidden="true"><span class="theme-preview-top"><i></i><i></i><i></i></span><span class="theme-preview-main"><i></i><span></span><span></span></span><span class="theme-preview-side"><i></i><i></i><i></i></span></span>
+          <span class="theme-option-label"><strong>Белый и кремовый</strong><small>Терракотовый акцент</small></span>
+          <span class="theme-option-check" aria-hidden="true">✓</span>
+        </label>
+        <label class="theme-option" data-theme-option="pine">
+          <input type="radio" name="appearance" value="pine" aria-label="Хвойный">
+          <span class="theme-preview" aria-hidden="true"><span class="theme-preview-top"><i></i><i></i><i></i></span><span class="theme-preview-main"><i></i><span></span><span></span></span><span class="theme-preview-side"><i></i><i></i><i></i></span></span>
+          <span class="theme-option-label"><strong>Хвойный</strong><small>Тёмная</small></span>
+          <span class="theme-option-check" aria-hidden="true">✓</span>
+        </label>
+      </div><small id="theme-status" role="status"></small></fieldset><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting update-setting">
           <div><strong>Обновление приложения</strong><small id="settings-update-status" aria-live="polite">Проверяю наличие обновлений…</small>
             <progress id="settings-update-progress" class="hidden" max="100" aria-label="Ход скачивания обновления"></progress></div>
           <div class="update-actions">

@@ -116,6 +116,7 @@ class StudentSections:
         self.home = None
         self.calendar_html = ""
         self.meeting_months = {}
+        self.meeting_subscriptions = {}
         self.forms = ActivityForms(client)
         self.library = WebinarLibrary(client, project_content)
 
@@ -147,10 +148,17 @@ class StudentSections:
         if int(person.get("id", 0)) != int(user_id):
             raise SDOError("СДО вернула другой профиль")
         thread = self.client._ajax(messages_html, "core_message_get_conversation_between_users", {"userid": me, "otheruserid": int(user_id)})
+        avatar = person.get("profileimageurl") or person.get("profileimageurlsmall") or ""
+        if avatar:
+            try:
+                avatar = safe_url(avatar)
+            except SDOError:
+                avatar = ""
         return {
             "name": person["fullname"], "userId": int(user_id),
             "id": thread.get("id") if isinstance(thread, dict) else None,
             "canMessage": not person.get("isblocked") and person.get("canmessage") not in (False, 0),
+            "avatar": avatar,
         }
 
     def _material(self, url, soup):
@@ -320,9 +328,11 @@ class StudentSections:
                 value = BeautifulSoup(event[key], "html.parser").get_text(" ", strip=True)
                 blocks.append(self._event_fact(label, value.replace(" ,", ",")))
         description = BeautifulSoup(event.get("description") or "", "html.parser")
+        subscription = None
         if event.get("eventtype") == "bbbevents":
             try:
-                blocks.extend(self._meeting_facts(identity, event.get("timestart")))
+                facts, subscription = self._meeting_facts(identity, event.get("timestart"))
+                blocks.extend(facts)
             except SDOError:
                 blocks.append(self._event_fact("Сведения о встрече", "Не удалось загрузить карточку встречи из СДО."))
         if description.get_text(strip=True).casefold() not in {"ввв событие", "bbb событие"}:
@@ -330,7 +340,7 @@ class StudentSections:
                 link.unwrap()
             if description.get_text(strip=True) or description.select_one("img, video, audio"):
                 blocks.append(project_content(description, "https://sdo.i-spo.ru/calendar/"))
-        return {"title": event["name"], "blocks": blocks}
+        return {"title": event["name"], "blocks": blocks, "subscription": subscription}
 
     @staticmethod
     def _event_fact(label, value):
@@ -341,7 +351,7 @@ class StudentSections:
     def _meeting_facts(self, identity, timestamp):
         unavailable = self._event_fact("Сведения о встрече", "СДО не опубликовала карточку и материалы для этого занятия.")
         if not isinstance(timestamp, int) or timestamp <= 0:
-            return [unavailable]
+            return [unavailable], None
         local = datetime.fromtimestamp(timestamp, timezone(timedelta(hours=3)))
         month = local.year, local.month
         if month not in self.meeting_months:
@@ -353,12 +363,12 @@ class StudentSections:
             }
         target = self.meeting_months[month].get(identity)
         if not target:
-            return [unavailable]
+            return [unavailable], None
         target = safe_url(target)
         parsed = urlparse(target)
         params = parse_qs(parsed.query)
         if parsed.path != "/" or params.get("action") != ["bbb_calendar"] or not params.get("id"):
-            return [unavailable]
+            return [unavailable], None
         page = BeautifulSoup(self.client._get(target), "html.parser")
         facts = []
         for label, selector in (
@@ -369,9 +379,54 @@ class StudentSections:
             node = page.select_one(selector)
             if node and node.get_text(strip=True):
                 facts.append(self._event_fact(label, node.get_text(" ", strip=True)))
-        return facts or [unavailable]
+        subscription = self._subscription_button(page)
+        if subscription:
+            self.meeting_subscriptions[identity] = target
+        else:
+            self.meeting_subscriptions.pop(identity, None)
+        return facts or [unavailable], subscription[2] if subscription else None
+
+    @staticmethod
+    def _subscription_button(page):
+        button = page.select_one("#region-main #subscribe_button[eventid][user]")
+        if not button or button.has_attr("hidden") or "display:none" in re.sub(r"\s+", "", button.get("style", "")).lower():
+            return None
+        event_id, user_id = button["eventid"], button["user"]
+        label = button.get_text(" ", strip=True).casefold()
+        if not (event_id.isdecimal() and user_id.isdecimal() and label in {"подписаться", "отписаться"}):
+            return None
+        return event_id, user_id, label == "отписаться"
+
+    def set_meeting_subscription(self, identity, subscribed):
+        if not isinstance(identity, str) or not isinstance(subscribed, bool):
+            raise SDOError("Некорректный запрос подписки")
+        target = self.meeting_subscriptions.get(identity)
+        if not target:
+            raise SDOError("Сначала откройте карточку мероприятия")
+        button = self._subscription_button(BeautifulSoup(self.client._get(target), "html.parser"))
+        if not button:
+            raise SDOError("СДО больше не предлагает подписку на это мероприятие")
+        event_id, account, current = button
+        _, user_id = self.client._message_context()
+        if int(account) != user_id:
+            raise SDOError("СДО вернула другой аккаунт для подписки")
+        if current != subscribed:
+            with self.client._request(
+                "POST", "/local/bbbevents/ajax.php",
+                data={"action": "subscribe", "eventid": event_id, "userid": account},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            ) as response:
+                if response.text.strip() != ("1" if subscribed else "0"):
+                    raise SDOError("СДО не подтвердила подписку. Откройте мероприятие заново.")
+        return {"subscribed": subscribed}
 
     def read(self, section, program="", material_url=""):
+        if section == "teacher":
+            url = safe_url(material_url)
+            if urlparse(url).path != "/user/profile.php":
+                raise SDOError("Ссылка на профиль преподавателя не поддерживается")
+            contact = self.student_contact(url)
+            return {"title": contact["name"], "contact": contact, "blocks": []}
         if section == "event":
             return self._event(material_url)
         if section == "recording":

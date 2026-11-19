@@ -16,12 +16,16 @@ from .client import SDOClient, SDOError
 from .diagnostic_log import logger, setup_logging, LOG_DIR, LOG_FILE
 from .sections import StudentSections
 from .documents import StudentFiles
+from .document_check import DocumentError, read_document
+from .document_web import GROUPS, check_online, open_check_link
 from .updates import acknowledge_restart, check_release, stage_update, RELEASE_INTERVAL, UPDATE_FAILURE, UpdateError
 
 
 SERVICE = "SDO-Reborn"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 MUTED_NOTIFICATIONS = LOG_DIR / "notifications-muted"
+APPEARANCE_FILE = LOG_DIR / "appearance.txt"
+APPEARANCES = {"night", "cobalt", "cream", "pine"}
 HIDE_UPDATE_PROMPTS = LOG_DIR / "hide-update-prompts"
 
 
@@ -43,6 +47,8 @@ class Bridge:
         "recordings", "activity_pick", "activity_submit", "app_version", "check_for_update",
         "logout", "settings", "set_autostart", "set_notification_sounds", "course_progress",
         "window_command", "refresh_update", "dismiss_update_prompts", "install_update", "update_progress",
+        "document_pick", "document_check", "document_check_progress", "document_open_link", "set_appearance",
+        "set_meeting_subscription",
     )
 
     def __dir__(self):
@@ -66,6 +72,9 @@ class Bridge:
         self._release_check_lock = threading.Lock()
         self._install_lock = threading.Lock()
         self._update_progress = {"phase": "idle"}
+        self._documents = {}
+        self._document_check_lock = threading.Lock()
+        self._document_progress = {"completed": 0, "total": 0}
 
     def bootstrap(self):
         try:
@@ -244,7 +253,7 @@ class Bridge:
     def student_section(self, section, program="", material_url=""):
         section_name = section if section in {
             "documents", "schedule", "grades", "official", "webinars", "news",
-            "profile", "material", "event", "calendar_day", "recording",
+            "profile", "material", "event", "calendar_day", "recording", "teacher",
         } else "unknown"
         return self._section_operation(
             section_name, self.student_sections.read, section, program, material_url
@@ -252,6 +261,9 @@ class Bridge:
 
     def course_image(self, url):
         return self._section_operation("image", self.files.image, url)
+
+    def set_meeting_subscription(self, identity, subscribed):
+        return self._section_operation("meeting_subscription", self.student_sections.set_meeting_subscription, identity, subscribed)
 
     def pdf_page(self, url, index):
         return self._section_operation("pdf", self.files.pdf_page, url, index)
@@ -280,6 +292,55 @@ class Bridge:
             return {"ok": True, "names": [Path(entry).name for entry in result]}
         except SDOError as error:
             return {"ok": False, "error": str(error)}
+
+    def document_pick(self):
+        section = self.student_sections
+        result = self.window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=False)
+        if not result:
+            return {"ok": True, "cancelled": True}
+        try:
+            entry = read_document(result[0])
+        except (DocumentError, OSError, UnicodeError, ValueError) as error:
+            message = str(error) if isinstance(error, DocumentError) else "Не удалось прочитать выбранный файл."
+            return {"ok": False, "error": message}
+        with self._lock:
+            if section is not self.student_sections:
+                return {"ok": False, "error": "Учётная запись изменилась."}
+            self._documents["primary"] = entry
+        return {"ok": True, "file": entry.metadata()}
+
+    def document_check(self, group):
+        if not isinstance(group, str) or group not in GROUPS:
+            return {"ok": False, "error": "Выберите тип работы."}
+        if not self._document_check_lock.acquire(blocking=False):
+            return {"ok": False, "error": "Проверка уже выполняется."}
+        self._document_progress = {"completed": 0, "total": 0}
+        try:
+            with self._lock:
+                document = self._documents.get("primary")
+                section = self.student_sections
+            if document is None:
+                return {"ok": False, "error": "Сначала выберите документ."}
+
+            def report(completed, total):
+                self._document_progress = {"completed": completed, "total": total}
+
+            cancelled = lambda: section is not self.student_sections or self._stop.is_set()
+            results = check_online(document, group, report, cancelled)
+            return {"ok": True, "results": results}
+        except DocumentError as error:
+            return {"ok": False, "error": str(error)}
+        except Exception as error:
+            logger.warning("document_check_failed type=%s", type(error).__name__)
+            return {"ok": False, "error": "Не удалось завершить поиск совпадений."}
+        finally:
+            self._document_check_lock.release()
+
+    def document_check_progress(self):
+        return self._document_progress
+
+    def document_open_link(self, url):
+        return {"ok": open_check_link(url)}
 
     def activity_submit(self, token, button, values, include_files):
         with self._lock:
@@ -372,11 +433,29 @@ class Bridge:
             self.student_sections = StudentSections(self.client, self.files)
             self._activity_files.clear()
             self.cached_data = None
+            self._documents.clear()
         self.window.clear_cookies()
         return {"ok": True}
 
     def settings(self):
-        return {"autostart": self._autostart_enabled(), "sounds": not MUTED_NOTIFICATIONS.exists()}
+        try:
+            theme = APPEARANCE_FILE.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            theme = "night"
+        return {"autostart": self._autostart_enabled(), "sounds": not MUTED_NOTIFICATIONS.exists(),
+                "theme": theme if theme in APPEARANCES else "night"}
+
+    def set_appearance(self, theme):
+        if not isinstance(theme, str) or theme not in APPEARANCES:
+            return {"ok": False}
+        try:
+            with self._lock:
+                temp = APPEARANCE_FILE.with_suffix(".tmp")
+                temp.write_text(theme, encoding="ascii")
+                temp.replace(APPEARANCE_FILE)
+            return {"ok": True}
+        except OSError:
+            return {"ok": False}
 
     def set_notification_sounds(self, enabled: bool):
         try:
