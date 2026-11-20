@@ -47,11 +47,15 @@ jobs:
           $version = (Get-Content -LiteralPath 'web/version.txt' -Raw).Trim()
           $notesFile = Join-Path $env:RUNNER_TEMP 'osek-release-notes.md'
           @'
+          ## Изменения
+
           > [!NOTE]
           > Большинство функций работают стабильно и надлежащим образом.
           > Некоторые функции могут отсутствовать.
 
           > [!WARNING]
           > Это неофициальный клиент [Открытого социально-экономического колледжа](https://sdo.i-spo.ru). Приложение создано без согласования с администрацией колледжа, не имеет к ней отношения и её одобрения. Вы используете его на свой страх и риск, соблюдая при этом правила колледжа. В работе приложения возможны ошибки.
-          '@ | Set-Content -LiteralPath $notesFile -Encoding utf8
+
+          **[VIRUSTOTAL-OSEK-Remastered-v0.VERSION.zip]()** `0/0` SHA256:
+          '@.Replace('VERSION', $version) | Set-Content -LiteralPath $notesFile -Encoding utf8
           gh release create $env:GITHUB_REF_NAME "dist/OSEK-Remastered-v0.$version.zip" --verify-tag --title "ОСЭК-Remastered-v0.$version" --notes-file $notesFile

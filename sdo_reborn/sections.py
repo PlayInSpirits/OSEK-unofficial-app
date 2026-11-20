@@ -277,8 +277,13 @@ class StudentSections:
                 raise SDOError("СДО не вернула страницы электронной книги")
             for number, image in enumerate(pages, 1):
                 image["alt"] = f"Страница {number}"
-            pdf = book.select_one('a[href*="pdf="]')
-            blocks = [project_content(pdf, url)] if pdf and pdf.get_text(strip=True) else []
+            blocks = []
+            for pdf in soup.select('a[href*="pdf="]'):
+                pdf_url = urljoin(url, pdf["href"])
+                parsed = urlparse(pdf_url)
+                if parsed.path == "/mod/gbooks/view.php" and parsed.netloc == urlparse(url).netloc:
+                    blocks.append({"tag": "a", "attrs": {"href": safe_url(pdf_url)}, "children": ["Просмотреть PDF"]})
+                    break
             blocks.extend(project_content(image, url) for image in pages)
             return blocks
         blocks = soup.select(SECTION_SELECTORS["material"])

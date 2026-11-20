@@ -17,6 +17,7 @@ import webview
 from PIL import Image
 
 from .client import SDOClient, SDOError
+from .study_ai import StudyAI
 from .diagnostic_log import logger, setup_logging, LOG_DIR, LOG_FILE
 from .sections import StudentSections
 from .documents import StudentFiles
@@ -75,6 +76,7 @@ class SessionLock:
 
 class Bridge:
     PUBLIC_METHODS = (
+        "study_ai", "study_pdf_summary", "study_ai_settings", "save_study_ai_settings",
         "bootstrap", "resume", "login", "refresh", "dashboard_panel", "load_home_cache", "save_home_cache", "topics", "curriculum",
         "programs", "student_section", "course_image", "pdf_page", "log_event",
         "get_log_path", "conversations", "conversation_messages", "send_message",
@@ -92,6 +94,7 @@ class Bridge:
 
     def __init__(self):
         self.client = SDOClient()
+        self._study_ai = StudyAI(LOG_DIR / "study-ai.sqlite3")
         self.files = StudentFiles(self.client)
         self.student_sections = StudentSections(self.client, self.files)
         self.window = None
@@ -350,6 +353,60 @@ class Bridge:
 
     def set_meeting_subscription(self, identity, subscribed):
         return self._section_operation("meeting_subscription", self.student_sections.set_meeting_subscription, identity, subscribed)
+
+    def _study_config(self):
+        if not self.client.username:
+            return {}
+        try:
+            config = json.loads(keyring.get_password(SERVICE + "-study-ai", self.client.username) or "{}")
+            if not isinstance(config, dict):
+                return {}
+            if config.get("mode") == "groq":
+                return {"mode": "gemini"}
+            return config
+        except Exception:
+            return {}
+
+    def study_ai_settings(self):
+        config = self._study_config()
+        return {"mode": config.get("mode", "relay" if os.environ.get("OSEK_AI_URL") else "gemini"), "url": config.get("url", ""), "hasKey": bool(config.get("key"))}
+
+    def save_study_ai_settings(self, mode, url, key, clear=False):
+        from urllib.parse import urlsplit
+        if not self.client.username or mode not in ("gemini", "relay") or not isinstance(url, str) or not isinstance(key, str):
+            return {"ok": False, "error": "Некорректные настройки ИИ."}
+        url, key = url.strip(), key.strip()
+        try:
+            if mode == "relay" and url:
+                parsed = urlsplit(url)
+                if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or len(url) > 500:
+                    raise ValueError()
+            if len(key) > 1024 or any(not 33 <= ord(c) <= 126 for c in key):
+                raise ValueError()
+            previous = self._study_config()
+            if not key and not clear and previous.get("mode") == mode:
+                key = previous.get("key", "")
+            keyring.set_password(SERVICE + "-study-ai", self.client.username,
+                                 json.dumps({"mode": mode, "url": url if mode == "relay" else "", "key": key}))
+            return {"ok": True}
+        except ValueError:
+            return {"ok": False, "error": "Проверьте HTTPS-адрес и формат ключа."}
+        except Exception:
+            return {"ok": False, "error": "Хранилище учётных данных Windows недоступно."}
+
+    def study_ai(self, scope, payload):
+        return self._study_ai.run(self.client.username, "question", scope, payload, self._study_config())
+
+    def study_pdf_summary(self, scope, url):
+        config = self._study_config()
+        if config.get("mode") == "gemini":
+            field, load = "pdf", self.files.pdf_document
+        else:
+            field, load = "text", self.files.pdf_text
+        answer = self._section_operation(field, load, url)
+        if not answer["ok"]:
+            return answer
+        return self._study_ai.run(self.client.username, "summary", scope, {field: answer["data"]}, config)
 
     def pdf_page(self, url, index):
         return self._section_operation("pdf", self.files.pdf_page, url, index)

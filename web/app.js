@@ -175,11 +175,56 @@ async function fillPrograms(selector) {
   paintPrograms(selector, programs);
 }
 
+let quizSession = null;
+let parkedQuiz = null;
+let submittingQuiz = false;
+let quickReturn = null;
+
+function updateQuizBanner() {
+  $('return-to-quiz').classList.toggle('hidden', !parkedQuiz);
+}
+
+function readerSnapshot() {
+  return {history: readerHistory.slice(), scroll: document.querySelector('main.content').scrollTop,
+    title: $('reader-title').textContent, status: $('reader-status').textContent,
+    reference: courseReference, body: [...$('reader-content').childNodes]};
+}
+
+function parkQuiz() {
+  parkedQuiz = readerSnapshot();
+  quizSession = null;
+  updateQuizBanner();
+}
+
+function restoreQuiz() {
+  if (!parkedQuiz) return false;
+  const state = parkedQuiz;
+  parkedQuiz = null;
+  quizSession = state.history.at(-1);
+  paintReaderSnapshot(state);
+  updateQuizBanner();
+  return true;
+}
+
+function paintReaderSnapshot(state) {
+  readerHistory.splice(0, readerHistory.length, ...state.history);
+  showPage('reader');
+  $('reader-title').textContent = state.title;
+  $('reader-status').textContent = state.status;
+  $('reader-content').replaceChildren(...state.body);
+  syncQuestionAIButtons();
+  syncCourseReference(state.reference);
+  document.querySelector('main.content').scrollTop = state.scroll;
+}
+
+$('return-to-quiz').addEventListener('click', restoreQuiz);
+
 function showPage(page, program = '') {
   closeNavigation();
   logAction('tab', page);
   if (!['resources', 'reader', 'course'].includes(page)) sessionStorage.setItem('osek-page', page);
   if (page !== 'reader') {
+    if (quizSession) parkQuiz();
     readerHistory.length = 0;
     ++readerVersion;
     $('reader-content').replaceChildren();
@@ -191,6 +236,7 @@ function showPage(page, program = '') {
   animateIn($('page-' + page));
   if (page === 'curriculum') loadCurriculum(program || $('nav-program').value);
   if (page === 'messages' && !messagesLoaded) loadConversations();
+  if (page === 'settings') loadAISettings().catch(() => { $('ai-settings-status').textContent = 'Не удалось прочитать настройки ИИ.'; });
 }
 
 function internalLink(title, action) {
@@ -351,13 +397,34 @@ function renderReferenceTopics() {
       heading = '';
     }
     const link = internalLink(item.title, () => openReferenceMaterial(item.url, item.title));
-    content.append(link);
+    const row = element('div', 'reference-topic');
+    row.append(link);
+    const path = new URL(item.url).pathname;
+    if (materialSection(item.url) === 'pdf' || /^\/mod\/(?:gbooks|nwresource|resource|book|page)\//.test(path)) {
+      const button = element('button', 'ghost study-ai-button', 'Краткая выжимка от ИИ');
+      button.type = 'button';
+      button.onclick = () => openReferenceMaterial(item.url, item.title, 0, true);
+      row.append(button);
+    }
+    content.append(row);
   }
   if (!content.firstChild) empty(content, 'СДО не вернула материалы этого предмета.');
   $('course-reference').scrollTop = 0;
 }
 
-async function openReferenceMaterial(url, title, pdfIndex = 0) {
+function referencePdfLinks(blocks) {
+  const links = new Set();
+  function visit(node) {
+    if (!node || typeof node !== 'object') return;
+    const href = node.tag === 'a' && node.attrs?.href;
+    if (href && materialSection(href) === 'pdf') links.add(href);
+    (node.children || []).forEach(visit);
+  }
+  blocks.forEach(visit);
+  return [...links];
+}
+
+async function openReferenceMaterial(url, title, pdfIndex = 0, summarize = false) {
   if (!courseReference) return;
   const version = ++referenceVersion;
   const content = $('course-reference-content');
@@ -369,15 +436,32 @@ async function openReferenceMaterial(url, title, pdfIndex = 0) {
       throw Error('Откройте учебный материал этого предмета из списка тем.');
     }
     const api = window.pywebview.api;
-    const result = section === 'pdf' ? await api.pdf_page(url, pdfIndex) : await api.student_section('material', '', url);
+    const result = section !== 'pdf' ? await api.student_section('material', '', url)
+      : summarize ? {ok: true, data: {}} : await api.pdf_page(url, pdfIndex);
     if (version !== referenceVersion) return;
     if (!result.ok) throw Error(result.error);
     content.replaceChildren(element('h3', '', result.data.title || title || 'Учебный материал'));
-    if (section === 'pdf') {
+    const blocks = result.data.blocks || [];
+    const pdfLinks = summarize ? (section === 'pdf' ? [url] : referencePdfLinks(blocks)) : [];
+    if (section === 'pdf' && !summarize) {
+      const summary = element('div', 'study-summary');
+      addStudyButton(content, 'Краткая выжимка от ИИ', () => api.study_pdf_summary(url, url),
+        text => { summary.textContent = text; });
+      content.append(summary);
       appendPdf(content, result.data, pdfIndex, index => openReferenceMaterial(url, title, index));
+    } else if (summarize) {
+      if (!pdfLinks.length) content.append(element('p', 'muted', 'СДО не предоставила PDF для этой темы.'));
+      for (const [index, pdfUrl] of pdfLinks.entries()) {
+        const summary = element('div', 'study-summary');
+        const button = addStudyButton(content, pdfLinks.length > 1 ? `Краткая выжимка из PDF ${index + 1}` : 'Краткая выжимка от ИИ',
+          () => api.study_pdf_summary(pdfUrl, pdfUrl), text => { summary.textContent = text; });
+        content.append(summary);
+        if (pdfLinks.length === 1) button.click();
+      }
+      content.append(internalLink('Открыть материал', () => openReferenceMaterial(url, title)));
     } else {
-      appendBlocks(content, result.data.blocks || [], openReferenceMaterial);
-      if (!result.data.blocks?.length) content.append(element('p', 'muted', 'СДО не вернула содержимое темы.'));
+      appendBlocks(content, blocks, openReferenceMaterial);
+      if (!blocks.length) content.append(element('p', 'muted', 'СДО не вернула содержимое темы.'));
     }
     $('course-reference').scrollTop = 0;
   } catch (error) {
@@ -388,11 +472,17 @@ async function openReferenceMaterial(url, title, pdfIndex = 0) {
 $('course-reference-back').addEventListener('click', renderReferenceTopics);
 
 function openReader(section, title, url, avatar = '', reference = null) {
+  if (parkedQuiz && section === 'material' && new URL(url).pathname.startsWith('/mod/quiz/')) { restoreQuiz(); return; }
+  if (submittingQuiz) return;
+  if (quizSession && readerHistory.at(-1) === quizSession) {
+    const path = section === 'material' ? new URL(url).pathname : '';
+    if (path !== '/mod/quiz/summary.php') { parkQuiz(); readerHistory.length = 0; }
+  }
   const current = document.querySelector('.page:not(.hidden)');
   const previous = readerHistory.at(-1);
   if (previous) previous.scroll = document.querySelector('main.content').scrollTop;
   readerHistory.push({
-    section, title, url, avatar, reference: reference || previous?.reference || null,
+    section, title, url, originalUrl: url, avatar, reference: reference || previous?.reference || null,
     returnPage: current.id.slice(5),
     returnScroll: document.querySelector('main.content').scrollTop,
     scroll: 0, pdfIndex: 0,
@@ -431,6 +521,9 @@ function paintReader(data, reading) {
   $('reader-status').textContent = data.notice || '';
   if (data.title) $('reader-title').textContent = data.title;
   if (data.url) reading.url = data.url;
+  const path = reading.section === 'material' ? new URL(reading.url).pathname : '';
+  if (['/mod/quiz/attempt.php', '/mod/quiz/summary.php'].includes(path)) quizSession = reading;
+  else if (quizSession === reading || path === '/mod/quiz/review.php') quizSession = null;
   if (data.contact) {
     renderTeacher(data.contact, content, reading.avatar);
   } else if (data.events) {
@@ -510,6 +603,63 @@ function renderTeacher(contact, parent, fallbackAvatar) {
 function curriculumTeacher(item) {
   if (!item.teacher_url) return element('span', '', item.teacher);
   return internalLink(item.teacher, () => openReader('teacher', item.teacher, item.teacher_url, item.teacher_avatar));
+}
+
+const questionAICooldownMs = 30_000;
+let questionAIUntil = 0;
+let questionAIPending = false;
+let questionAITimer = null;
+
+function syncQuestionAIButtons(buttons = document.querySelectorAll('[data-question-ai]')) {
+  const seconds = Math.max(0, Math.ceil((questionAIUntil - performance.now()) / 1000));
+  for (const button of buttons) {
+    button.disabled = seconds > 0 || questionAIPending;
+    button.textContent = seconds ? `Режим ИИ · ${seconds} с` : questionAIPending ? 'Режим ИИ · ожидаю ответ' : 'Режим ИИ';
+  }
+  if (!seconds && questionAITimer !== null) {
+    clearInterval(questionAITimer);
+    questionAITimer = null;
+  }
+}
+
+function addStudyButton(parent, title, request, apply, isQuestion = false) {
+  const button = element('button', 'ghost study-ai-button', title);
+  button.type = 'button';
+  if (isQuestion) {
+    button.dataset.questionAi = '';
+    syncQuestionAIButtons([button]);
+  }
+  const status = element('p', 'muted study-ai-status');
+  status.setAttribute('role', 'status');
+  button.onclick = async () => {
+    if (isQuestion) {
+      if (questionAIPending || performance.now() < questionAIUntil) return;
+      questionAIPending = true;
+      questionAIUntil = performance.now() + questionAICooldownMs;
+      if (questionAITimer === null) questionAITimer = setInterval(syncQuestionAIButtons, 200);
+      syncQuestionAIButtons();
+    } else {
+      button.disabled = true;
+    }
+    status.textContent = 'Получаю результат…';
+    try {
+      const result = await request();
+      if (!result.ok) throw Error(result.error);
+      apply(result.data);
+      status.textContent = result.cached ? 'Сохранённая рекомендация ИИ' : 'Рекомендация ИИ';
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      if (isQuestion) {
+        questionAIPending = false;
+        syncQuestionAIButtons();
+      } else {
+        button.disabled = false;
+      }
+    }
+  };
+  parent.append(button, status);
+  return button;
 }
 
 function makeActivityWidget(widget) {
@@ -596,7 +746,27 @@ function renderActivityForm(data, reading) {
         target.append(question);
       } else target.append(renderSourceNode(group.content));
     }
-    for (const widget of group.widgets) target.append(makeActivityWidget(widget));
+    const choices = [];
+    for (const widget of group.widgets) {
+      const control = makeActivityWidget(widget);
+      target.append(control);
+      if (widget.number && ['radio', 'checkbox'].includes(widget.kind)) {
+        choices.push({control, text: control.querySelector('.activity-answer-caption')?.textContent.trim()});
+      }
+    }
+    const questionText = target.querySelector('.activity-question-text');
+    if (group.question && questionText && choices.length > 1 && choices.every(choice => choice.text)) {
+      const question = questionText.textContent.trim();
+      const tools = element('div', 'study-question-tools');
+      questionText.append(tools);
+      const url = new URL(reading.originalUrl || reading.url);
+      const quizId = url.searchParams.get('cmid') || url.searchParams.get('id');
+      const scope = quizId ? 'module:' + url.pathname.split('/')[2] + ':' + quizId
+        : url.pathname + ':' + (url.searchParams.get('attempt') || '');
+      addStudyButton(tools, 'Режим ИИ', () => window.pywebview.api.study_ai(scope, {
+        question, options: choices.map((choice, index) => ({id:index, text:choice.text})),
+      }), ids => choices.forEach((choice,index) => choice.control.classList.toggle('study-ai-suggested',ids.includes(index))), true);
+    }
     if (group.question) controls.append(target);
   }
   for (const [index, text] of data.buttons.entries()) {
@@ -616,6 +786,8 @@ function renderActivityForm(data, reading) {
     const index = Number(event.submitter?.value || 0);
     const values = Object.fromEntries(new FormData(form));
     const version = readerVersion;
+    const isQuiz = quizSession === reading || new URL(reading.url).pathname.startsWith('/mod/quiz/');
+    if (isQuiz) submittingQuiz = true;
     controls.disabled = true;
     status.textContent = files.length ? 'Загружаю файл и сохраняю ответ…' : 'Отправляю данные в СДО…';
     try {
@@ -632,7 +804,7 @@ function renderActivityForm(data, reading) {
       reload.type = 'button';
       reload.onclick = renderReader;
       form.append(reload);
-    }
+    } finally { if (isQuiz) submittingQuiz = false; }
   });
   return form;
 }
@@ -1349,12 +1521,27 @@ $('nav-program').addEventListener('change', () => {
 $('course-back').addEventListener('click', () => showPage(courseReturnPage));
 document.querySelectorAll('[data-page]').forEach(button => {
   button.addEventListener('click', () => {
-    const page = button.classList.contains('quick-icon') && button.classList.contains('active') ? 'home' : button.dataset.page;
+    if (submittingQuiz) return;
+    const page = button.dataset.page;
+    if (button.classList.contains('quick-icon')) {
+      const current = document.querySelector('.page:not(.hidden)').id.slice(5);
+      if (current === page && quickReturn) {
+        const previous = quickReturn;
+        quickReturn = null;
+        if (previous.page === 'reader' && restoreQuiz()) return;
+        if (previous.reader) { paintReaderSnapshot(previous.reader); return; }
+        showPage(previous.page);
+        document.querySelector('main.content').scrollTop = previous.scroll;
+        return;
+      }
+      quickReturn = {page: current, reader: current === 'reader' && !quizSession ? readerSnapshot() : null,
+        scroll: document.querySelector('main.content').scrollTop};
+    } else quickReturn = null;
     showPage(page, button.hasAttribute('data-program') ? $('nav-program').value : '');
   });
 });
 document.querySelectorAll('[data-section]').forEach(button => {
-  button.addEventListener('click', () => showResource(button.dataset.section, '', '', button.hasAttribute('data-program') ? $('nav-program').value : ''));
+  button.addEventListener('click', () => !submittingQuiz && showResource(button.dataset.section, '', '', button.hasAttribute('data-program') ? $('nav-program').value : ''));
 });
 for (const [id, direction] of [['month-prev', -1], ['month-next', 1]]) {
   $(id).addEventListener('click', () => {
@@ -1382,6 +1569,12 @@ $('curriculum-program').addEventListener('change', () => {
   loadCurriculum();
 });
 $('reader-back').addEventListener('click', () => {
+  if (submittingQuiz) return;
+  if (quizSession === readerHistory.at(-1) && quizSession) {
+    const previous = readerHistory[0].returnPage;
+    showPage(previous === 'reader' ? 'course' : previous);
+    return;
+  }
   const reading = readerHistory.pop();
   if (readerHistory.length) {
     renderReader();
@@ -1405,6 +1598,8 @@ $('login-form').addEventListener('submit', async event => {
   else $('login-status').textContent = result.error || 'Не удалось войти';
 });
 $('logout').addEventListener('click', async () => {
+  quizSession = parkedQuiz = quickReturn = null;
+  updateQuizBanner();
   await window.pywebview.api.logout();
   clearTimeout(cacheTimer);
   homeCacheOwner = '';
@@ -1457,6 +1652,28 @@ $('logout').addEventListener('click', async () => {
   $('username').value = '';
   $('password').value = '';
 });
+function syncAISettings() {
+  $('ai-url-label').classList.toggle('hidden', $('ai-provider').value !== 'relay');
+}
+async function loadAISettings() {
+  const config = await window.pywebview.api.study_ai_settings();
+  $('ai-provider').value = config.mode;
+  $('ai-url').value = config.url;
+  $('ai-key').value = '';
+  $('ai-key').placeholder = config.hasKey ? 'Ключ сохранён' : 'Введите ключ';
+  syncAISettings();
+}
+async function saveAISettings(clear) {
+  const result = await window.pywebview.api.save_study_ai_settings(
+    $('ai-provider').value, $('ai-url').value, clear ? '' : $('ai-key').value, clear);
+  $('ai-key').value = '';
+  $('ai-settings-status').textContent = result.ok ? (clear ? 'Ключ удалён.' : 'Настройки сохранены.') : result.error;
+  if (result.ok) await loadAISettings();
+}
+$('ai-provider').addEventListener('change', syncAISettings);
+$('ai-settings').addEventListener('submit', event => { event.preventDefault(); saveAISettings(false); });
+$('ai-clear').addEventListener('click', () => saveAISettings(true));
+
 function applyAppearance(theme) {
   const safe = ['night', 'cobalt', 'cream', 'pine', 'plum'].includes(theme) ? theme : 'night';
   document.body.dataset.theme = safe;

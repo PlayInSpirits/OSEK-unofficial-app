@@ -249,13 +249,22 @@
           <span class="theme-option-label"><strong>Фиолетовая ночь</strong><small>Тёмная</small></span>
           <span class="theme-option-check" aria-hidden="true">✓</span>
         </label>
-      </div><small id="theme-status" role="status"></small></fieldset><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting update-setting">
+      </div><small id="theme-status" role="status"></small></fieldset><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting ai-setting"><form id="ai-settings">
+          <strong>API для ИИ</strong>
+          <label>Подключение <select id="ai-provider"><option value="gemini">Gemini · личный ключ</option><option value="relay">Сервер ОСЭК</option></select></label>
+          <label id="ai-url-label">Адрес сервера <input id="ai-url" type="url" placeholder="https://…/study-ai"></label>
+          <label>Ключ или токен <input id="ai-key" type="password" autocomplete="off"></label>
+          <small>При использовании ИИ текст вопроса или PDF отправляется выбранному сервису.</small>
+          <div><button type="submit" class="primary">Сохранить API</button> <button id="ai-clear" type="button" class="ghost">Удалить ключ</button></div>
+          <small id="ai-settings-status" role="status"></small>
+        </form></div><div class="setting update-setting">
           <div><strong>Обновление приложения</strong><small id="settings-update-status" aria-live="polite">Проверяю наличие обновлений…</small>
             <progress id="settings-update-progress" class="hidden" max="100" aria-label="Ход скачивания обновления"></progress></div>
 
         </div><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div><div class="setting"><span><strong>Журнал диагностики</strong><small id="log-path">Загрузка пути…</small></span></div></div><p class="muted note">Журнал записывает переходы и ошибки без пароля и текста сообщений.</p></section>
     </main>
   </div>
+  <button id="return-to-quiz" type="button" class="primary hidden">Вернуться к тесту</button>
   <footer class="release-footer" aria-label="Версия приложения">
     <span id="client-caption" class="client-caption hidden">Неофициальный клиент ОСЭК</span>
     <span id="app-version"></span>

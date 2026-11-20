@@ -1008,6 +1008,8 @@ body[data-theme=cream] .app .theme-options .theme-option[data-theme-option=cream
 .course-reference { position:sticky; top:12px; max-height:calc(100vh - 160px); overflow:auto; padding:clamp(12px,1.4vw,20px); }
 #course-reference-name { margin:7px 0 10px; }
 #course-reference-content > .internal-link { display:block; padding-block:7px; }
+#course-reference-content .reference-topic { display:grid; justify-items:start; gap:5px; padding-block:7px; }
+#course-reference-content .reference-topic .study-ai-button { padding:5px 9px; font-size:.85em; }
 #course-reference-content .resource-block { margin-top:8px; padding:12px; overflow:auto; }
 #course-reference-content h3 { margin-block:9px; }
 #course-reference-content .pdf-toolbar { gap:7px; margin-block:8px; }
@@ -1067,3 +1069,20 @@ body.light .activity-flag-icon { color:#bc263a; }
 
 /* Links use color and keyboard focus rather than underlining. */
 a, .internal-link { text-decoration: none; }
+
+.study-question-tools { display:grid; justify-items:end; margin-top:6px; }
+.study-ai-status { font-size:.85em; margin:4px 0; }
+.study-ai-status:empty,.study-summary:empty { display:none; }
+.study-ai-suggested { border-radius:8px; outline:1px solid #e45060; background:#e450602a; }
+.study-summary { white-space:pre-wrap; margin:10px 0; line-height:1.55; }
+
+#return-to-quiz { position:fixed; z-index:45; bottom:52px; right:18px; box-shadow:0 8px 26px #0005; }
+.ai-setting { padding-block:12px; }
+.ai-setting form { display:grid; gap:8px; width:min(100%,520px); }
+.ai-setting label { display:grid; gap:4px; }
+.ai-setting input { width:100%; height:auto; padding:7px 9px; border:1px solid var(--border); border-radius:7px; background:var(--shell); color:var(--text); }
+
+/* Keep quiz answers compact without changing other forms. */
+.activity-question .activity-field { margin-block:3px; line-height:1.35; }
+.activity-question .activity-choice { gap:8px; }
+.activity-question .activity-answer-caption :is(div,p) { margin-block:0; }

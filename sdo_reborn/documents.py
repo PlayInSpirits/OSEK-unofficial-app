@@ -56,7 +56,7 @@ class StudentFiles:
             raise SDOError("СДО не вернула читаемое изображение") from None
         return data_url(raw, mime)
 
-    def pdf_page(self, url, index):
+    def _load_pdf(self, url):
         parsed = urlparse(url)
         is_public = parsed.hostname == LIBRARY_HOST
         url = public_url(url) if is_public else safe_url(url)
@@ -68,8 +68,6 @@ class StudentFiles:
             raise SDOError("Адрес PDF не поддерживается")
         if parsed.path == "/mod/gbooks/view.php" and "pdf" not in parse_qs(parsed.query):
             raise SDOError("СДО не указала PDF книги")
-        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-            raise SDOError("Неверный номер страницы")
         if self.pdf_url != url:
             limit = 35 * 1024 * 1024
             if is_public:
@@ -88,6 +86,41 @@ class StudentFiles:
             if not content.startswith(b"%PDF-"):
                 raise SDOError("СДО вернула ответ без PDF")
             self.pdf_url, self.pdf_data = url, content
+
+    def pdf_document(self, url):
+        self._load_pdf(url)
+        return self.pdf_data
+
+    def pdf_text(self, url):
+        self._load_pdf(url)
+        parts = []
+        size = 0
+        try:
+            with pypdfium2.PdfDocument(self.pdf_data) as document:
+                for index, page in enumerate(document, 1):
+                    try:
+                        layer = page.get_textpage()
+                        try:
+                            content = layer.get_text_bounded().strip()
+                        finally:
+                            layer.close()
+                    finally:
+                        page.close()
+                    if content:
+                        size += len(content)
+                        if size > 600000:
+                            raise SDOError("В PDF слишком много текста для одной выжимки.")
+                        parts.append(f"[Страница {index}]\n{content}")
+        except pypdfium2.PdfiumError:
+            raise SDOError("Не удалось извлечь текст PDF.") from None
+        if not parts:
+            raise SDOError("В PDF нет текстового слоя. Для сканов нужно распознавание.")
+        return "\n\n".join(parts)
+
+    def pdf_page(self, url, index):
+        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+            raise SDOError("Неверный номер страницы")
+        self._load_pdf(url)
         try:
             with pypdfium2.PdfDocument(self.pdf_data) as document:
                 total = len(document)
