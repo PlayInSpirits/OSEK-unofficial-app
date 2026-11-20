@@ -146,10 +146,20 @@
         <div id="resource-content" class="resource-content"></div>
       </section>
       <section id="page-reader" class="page reader hidden">
-        <button id="reader-back" type="button" class="ghost">← Назад</button>
-        <h1 id="reader-title"></h1>
-        <p id="reader-status" class="muted" role="status"></p>
-        <div id="reader-content" class="resource-content"></div>
+        <div id="reader-layout" class="reader-layout">
+          <div class="reader-primary">
+            <button id="reader-back" type="button" class="ghost">← Назад</button>
+            <h1 id="reader-title"></h1>
+            <p id="reader-status" class="muted" role="status"></p>
+            <div id="reader-content" class="resource-content"></div>
+          </div>
+          <aside id="course-reference" class="panel course-reference hidden" aria-labelledby="course-reference-heading">
+            <h2 id="course-reference-heading">Материалы предмета</h2>
+            <p id="course-reference-name" class="muted"></p>
+            <button id="course-reference-back" type="button" class="ghost hidden">← К списку тем</button>
+            <div id="course-reference-content"></div>
+          </aside>
+        </div>
       </section>
       <section id="page-messages" class="page hidden">
         <div class="heading"><h1>Сообщения</h1></div>
@@ -231,6 +241,12 @@
           <input type="radio" name="appearance" value="pine" aria-label="Хвойный">
           <span class="theme-preview" aria-hidden="true"><span class="theme-preview-top"><i></i><i></i><i></i></span><span class="theme-preview-main"><i></i><span></span><span></span></span><span class="theme-preview-side"><i></i><i></i><i></i></span></span>
           <span class="theme-option-label"><strong>Хвойный</strong><small>Тёмная</small></span>
+          <span class="theme-option-check" aria-hidden="true">✓</span>
+        </label>
+        <label class="theme-option" data-theme-option="plum">
+          <input type="radio" name="appearance" value="plum" aria-label="Фиолетовая ночь">
+          <span class="theme-preview" aria-hidden="true"><span class="theme-preview-top"><i></i><i></i><i></i></span><span class="theme-preview-main"><i></i><span></span><span></span></span><span class="theme-preview-side"><i></i><i></i><i></i></span></span>
+          <span class="theme-option-label"><strong>Фиолетовая ночь</strong><small>Тёмная</small></span>
           <span class="theme-option-check" aria-hidden="true">✓</span>
         </label>
       </div><small id="theme-status" role="status"></small></fieldset><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting update-setting">

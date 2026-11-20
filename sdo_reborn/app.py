@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+import json
+import hashlib
+import tempfile
 import sys
 import threading
 import time
 from pathlib import Path
+from contextlib import contextmanager
 
 import keyring
 import webview
@@ -25,7 +29,7 @@ SERVICE = "SDO-Reborn"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 MUTED_NOTIFICATIONS = LOG_DIR / "notifications-muted"
 APPEARANCE_FILE = LOG_DIR / "appearance.txt"
-APPEARANCES = {"night", "cobalt", "cream", "pine"}
+APPEARANCES = {"night", "cobalt", "cream", "pine", "plum"}
 HIDE_UPDATE_PROMPTS = LOG_DIR / "hide-update-prompts"
 
 
@@ -38,9 +42,41 @@ def icon_image() -> Image.Image:
     return Image.open(resource_path("assets/icon.png")).convert("RGBA")
 
 
+class SessionLock:
+    """Keep the HTTP session serialized and let foreground work pass queued reads."""
+
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.owner = None
+        self.depth = 0
+        self.urgent = 0
+
+    @contextmanager
+    def hold(self, priority=False):
+        ident = threading.get_ident()
+        with self.condition:
+            if self.owner != ident:
+                self.urgent += int(priority)
+                try:
+                    self.condition.wait_for(
+                        lambda: self.owner is None and (priority or self.urgent == 0)
+                    )
+                    self.owner = ident
+                finally:
+                    self.urgent -= int(priority)
+            self.depth += 1
+        try:
+            yield
+        finally:
+            with self.condition:
+                self.depth -= 1
+                if not self.depth:
+                    self.owner = None
+                    self.condition.notify_all()
+
 class Bridge:
     PUBLIC_METHODS = (
-        "bootstrap", "resume", "login", "refresh", "topics", "curriculum",
+        "bootstrap", "resume", "login", "refresh", "dashboard_panel", "load_home_cache", "save_home_cache", "topics", "curriculum",
         "programs", "student_section", "course_image", "pdf_page", "log_event",
         "get_log_path", "conversations", "conversation_messages", "send_message",
         "search_people", "send_to_user", "mark_conversation_read", "mark_notification_read",
@@ -62,7 +98,8 @@ class Bridge:
         self.window = None
         self.cached_data = None
         self._activity_files = {}
-        self._lock = threading.RLock()
+        self._lock = SessionLock()
+        self._home_cache_lock = threading.Lock()
         self._tray = None
         self._quitting = False
         self._maximized = False
@@ -83,6 +120,58 @@ class Bridge:
         except Exception:
             return {"ok": False, "username": ""}
         return {"saved": bool(username and password), "username": username or ""}
+
+    @staticmethod
+    def _home_cache_path(username):
+        key = hashlib.sha256(username.encode("utf-8")).hexdigest()
+        return LOG_DIR / "dashboard-cache" / (key + ".json")
+
+    def load_home_cache(self):
+        with self._home_cache_lock:
+            username = self.client.username
+            if not username:
+                return {}
+            try:
+                path = self._home_cache_path(username)
+                if path.stat().st_size <= 2_000_000:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(data, dict):
+                        panels = data.get("panels")
+                        if isinstance(panels, dict):
+                            panels.pop("deadlines", None)
+                        return data
+            except (OSError, ValueError):
+                pass
+            return {}
+
+    def save_home_cache(self, username, data):
+        with self._home_cache_lock:
+            if not self.client.username or username != self.client.username or not isinstance(data, dict):
+                return
+            keys = ("programs", "plans", "progress", "days", "panels")
+            snapshot = {key: data[key] for key in keys if key in data}
+            panels = snapshot.get("panels")
+            if isinstance(panels, dict):
+                snapshot["panels"] = {key: panels[key] for key in ("calendar",) if key in panels}
+            text = json.dumps(snapshot, ensure_ascii=False)
+            if len(text.encode("utf-8")) > 2_000_000:
+                return
+            path = self._home_cache_path(username)
+            temp = None
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=path.parent, encoding="utf-8", mode="w", delete=False) as handle:
+                    temp = Path(handle.name)
+                    handle.write(text)
+                temp.replace(path)
+            except OSError:
+                logger.warning("home_cache_write_failed")
+            finally:
+                if temp:
+                    try:
+                        temp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
     def app_version(self):
         return f"v0.{self._installed_version}"
@@ -172,7 +261,7 @@ class Bridge:
             password = keyring.get_password(SERVICE, username) if username else None
             if not username or not password:
                 return {"ok": False, "error": "Сохранённый вход не найден"}
-            with self._lock:
+            with self._lock.hold():
                 self.client.login(username, password)
                 data = self.client.dashboard()
                 self.cached_data = data
@@ -188,7 +277,7 @@ class Bridge:
     def login(self, username: str, password: str):
         logger.info("auth_login_start")
         try:
-            with self._lock:
+            with self._lock.hold():
                 self.client.login(username, password)
                 self.files = StudentFiles(self.client)
                 self.student_sections = StudentSections(self.client, self.files)
@@ -209,7 +298,7 @@ class Bridge:
     def refresh(self):
         logger.info("data_refresh_start")
         try:
-            with self._lock:
+            with self._lock.hold():
                 self.cached_data = self.client.dashboard()
                 logger.info("data_refresh_success")
                 return {"ok": True, "data": self.cached_data}
@@ -217,9 +306,13 @@ class Bridge:
             logger.warning("data_refresh_failed type=SDOError")
             return {"ok": False, "error": str(error)}
 
+    def dashboard_panel(self, panel):
+        with self._lock.hold():
+            return self._section_operation("dashboard_panel", self.client.dashboard_panel, panel)
+
     def assignments(self, course_url: str):
         try:
-            with self._lock:
+            with self._lock.hold():
                 return {"ok": True, "items": self.client.assignments(course_url)}
         except SDOError as error:
             return {"ok": False, "error": str(error)}
@@ -228,11 +321,11 @@ class Bridge:
         return self._section_operation("course", self.student_sections.course, course_url)
 
     def course_progress(self, course_url: str):
-        return self._section_operation("course_progress", self.client.course_progress, course_url)
+        return self._section_operation("course_progress", self.student_sections.course_progress, course_url)
 
     def curriculum(self, program=""):
         try:
-            with self._lock:
+            with self._lock.hold():
                 programs = self.student_sections.programs()
                 if not programs:
                     raise SDOError("СДО не показала учебные программы")
@@ -240,7 +333,7 @@ class Bridge:
                     program = next((item["id"] for item in programs if item["active"]), programs[0]["id"])
                 if not any(item["id"] == program for item in programs):
                     raise SDOError("Учебная программа не найдена в текущей учётной записи")
-                items = self.client.curriculum(program)
+                items = self.student_sections.curriculum(program)
                 logger.info("curriculum_loaded count=%d", len(items))
                 return {"ok": True, "items": items}
         except SDOError as error:
@@ -250,13 +343,14 @@ class Bridge:
     def programs(self):
         return self._section_operation("programs", self.student_sections.programs)
 
-    def student_section(self, section, program="", material_url=""):
+    def student_section(self, section, program="", material_url="", foreground=False):
         section_name = section if section in {
             "documents", "schedule", "grades", "official", "webinars", "news",
             "profile", "material", "event", "calendar_day", "recording", "teacher",
         } else "unknown"
         return self._section_operation(
-            section_name, self.student_sections.read, section, program, material_url
+            section_name, self.student_sections.read, section, program, material_url,
+            priority=foreground is True and section == "material",
         )
 
     def course_image(self, url):
@@ -282,7 +376,7 @@ class Bridge:
                 return {"ok": True, "names": None}
             if limit is not None and len(result) > limit:
                 raise SDOError(f"Можно выбрать не больше {limit} файлов")
-            with self._lock:
+            with self._lock.hold():
                 if section is not self.student_sections:
                     raise SDOError("Учётная запись изменилась")
                 section.forms.upload_limit(token)
@@ -303,7 +397,7 @@ class Bridge:
         except (DocumentError, OSError, UnicodeError, ValueError) as error:
             message = str(error) if isinstance(error, DocumentError) else "Не удалось прочитать выбранный файл."
             return {"ok": False, "error": message}
-        with self._lock:
+        with self._lock.hold():
             if section is not self.student_sections:
                 return {"ok": False, "error": "Учётная запись изменилась."}
             self._documents["primary"] = entry
@@ -316,7 +410,7 @@ class Bridge:
             return {"ok": False, "error": "Проверка уже выполняется."}
         self._document_progress = {"completed": 0, "total": 0}
         try:
-            with self._lock:
+            with self._lock.hold():
                 document = self._documents.get("primary")
                 section = self.student_sections
             if document is None:
@@ -343,18 +437,18 @@ class Bridge:
         return {"ok": open_check_link(url)}
 
     def activity_submit(self, token, button, values, include_files):
-        with self._lock:
+        with self._lock.hold(priority=True):
             selected = self._activity_files.pop(token, ())
             return self._section_operation(
                 "activity_submit", self.student_sections.submit_activity, token, button, values,
                 selected if include_files else (),
             )
 
-    def _section_operation(self, name, operation, *arguments):
+    def _section_operation(self, name, operation, *arguments, priority=False):
         started = time.monotonic()
         logger.info("section_start section=%s", name)
         try:
-            with self._lock:
+            with self._lock.hold(priority):
                 if not self.client.username:
                     raise SDOError("Сначала войдите в СДО")
                 data = operation(*arguments)
@@ -377,7 +471,7 @@ class Bridge:
 
     def conversations(self):
         try:
-            with self._lock:
+            with self._lock.hold():
                 rows = self.client.conversations()
             logger.info("messages_list_loaded count=%d", len(rows))
             return {"ok": True, "items": rows}
@@ -399,7 +493,7 @@ class Bridge:
 
     def conversation_messages(self, conversation_id: int):
         try:
-            with self._lock:
+            with self._lock.hold():
                 rows = self.client.conversation_messages(conversation_id)
             logger.info("messages_thread_loaded count=%d", len(rows))
             return {"ok": True, "items": rows}
@@ -409,7 +503,7 @@ class Bridge:
 
     def send_message(self, conversation_id: int, text: str):
         try:
-            with self._lock:
+            with self._lock.hold():
                 self.client.send_message(conversation_id, text)
             logger.info("message_sent conversation=%d", int(conversation_id))
             return {"ok": True}
@@ -426,9 +520,15 @@ class Bridge:
                 keyring.delete_password(SERVICE, "__last_user__")
             except keyring.errors.PasswordDeleteError:
                 logger.info("auth_logout_saved_entry_absent")
-        with self._lock:
+        with self._lock.hold(priority=True), self._home_cache_lock:
+            cache_owner = self.client.username or username
             self.client.close()
             self.client = SDOClient()
+            if cache_owner:
+                try:
+                    self._home_cache_path(cache_owner).unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("home_cache_delete_failed")
             self.files = StudentFiles(self.client)
             self.student_sections = StudentSections(self.client, self.files)
             self._activity_files.clear()
@@ -449,7 +549,7 @@ class Bridge:
         if not isinstance(theme, str) or theme not in APPEARANCES:
             return {"ok": False}
         try:
-            with self._lock:
+            with self._lock.hold():
                 temp = APPEARANCE_FILE.with_suffix(".tmp")
                 temp.write_text(theme, encoding="ascii")
                 temp.replace(APPEARANCE_FILE)
@@ -510,10 +610,14 @@ class Bridge:
     def _quit(self):
         self._quitting = True
         self._stop.set()
-        self.client.close()
-        if self._tray:
-            self._tray.stop()
-        self.window.destroy()
+        try:
+            self.client.close()
+        finally:
+            try:
+                if self._tray:
+                    self._tray.stop()
+            finally:
+                self.window.destroy()
 
     def _start_tray(self):
         try:
@@ -575,7 +679,7 @@ class Bridge:
         previous_account = None
         while not self._stop.wait(120):
             try:
-                with self._lock:
+                with self._lock.hold():
                     if not self.client.username:
                         previous_account = None
                         continue
@@ -588,7 +692,7 @@ class Bridge:
                 if previous_notifications is not None and current - previous_notifications:
                     self._notify("Есть новые уведомления в СДО", "SystemNotification")
                 previous_notifications = current
-                with self._lock:
+                with self._lock.hold():
                     if account != (self.client, self.client.username):
                         continue
                     conversations = self.client.conversations()

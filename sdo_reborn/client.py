@@ -60,6 +60,7 @@ class SDOClient:
         self.username: str | None = None
         self._password: str | None = None
         self._last_request = 0.0
+        self.dashboard_html = ""
 
     def close(self):
         self._password = None
@@ -125,32 +126,38 @@ class SDOClient:
     def _get(self, path: str) -> str:
         return self._authenticated_response(path).text
 
-    def _authenticated_response(self, path: str) -> requests.Response:
-        response = self._request("GET", path)
+    def _authenticated_response(self, path: str, *, headers=None) -> requests.Response:
+        response = self._request("GET", path, headers=headers)
         if "/login/index.php" in response.url or not self._logged_in(response.text):
             if not self.username or not self._password:
                 raise SDOError("Нужно войти в СДО")
             self.login(self.username, self._password)
-            response = self._request("GET", path)
+            response = self._request("GET", path, headers=headers)
             if not self._logged_in(response.text):
                 raise SDOError("Сессия СДО истекла")
         return response
 
     def dashboard(self) -> dict:
-        my_html = self._get("/my/")
-        calendar_html = self._get("/calendar/view.php?view=upcoming")
-        try:
-            notifications = self.notification_snapshot(my_html)
-        except SDOError:
-            notifications = {"items": [], "unread": 0}
+        html = self._get("/my/")
+        self.dashboard_html = html
         return {
-            "courses": [asdict(item) for item in parse_courses(my_html)],
-            "events": [asdict(item) for item in parse_events(calendar_html)],
-            "deadlines": self.deadlines(my_html),
-            "notifications": notifications["items"],
-            "unread_notifications": notifications["unread"],
-            "profile": self.profile(my_html),
+            "courses": [asdict(item) for item in parse_courses(html)],
+            "events": [], "deadlines": [], "notifications": [],
+            "unread_notifications": 0, "profile": self.profile(html),
         }
+
+    def dashboard_panel(self, panel):
+        html = self.dashboard_html
+        if not html:
+            raise SDOError("Сначала загрузите главную страницу")
+        if panel == "calendar":
+            return {"events": [asdict(item) for item in parse_events(self._get("/calendar/view.php?view=upcoming"))]}
+        if panel == "deadlines":
+            return {"deadlines": self.deadlines(html)}
+        if panel == "notifications":
+            notifications = self.notification_snapshot(html)
+            return {"notifications": notifications["items"], "unread_notifications": notifications["unread"]}
+        raise SDOError("Неизвестный блок главной страницы")
 
     @staticmethod
     def profile(html: str) -> dict:
@@ -325,7 +332,10 @@ class SDOClient:
         return page, int(area["data-user-id"])
 
     def notification_snapshot(self, my_html: str) -> dict:
-        _, user_id = self._notification_context()
+        soup = BeautifulSoup(my_html, "html.parser")
+        area = soup.select_one('[data-region="notification-area"][data-user-id]')
+        uid = area.get("data-user-id", "") if area else ""
+        user_id = int(uid) if uid.isdecimal() else self._notification_context()[1]
         data = self._ajax(my_html, "message_popup_get_popup_notifications", {"useridto": user_id, "limit": 20, "offset": 0})
         if not isinstance(data, dict) or not isinstance(data.get("unreadcount"), int):
             raise SDOError("СДО не вернула состояние уведомлений")

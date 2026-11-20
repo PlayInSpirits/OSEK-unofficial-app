@@ -856,70 +856,76 @@ article.curriculum-card:hover { border-color: #4776bd; }
   --desk-hover:#32815c; --desk-link:#97ecb9; --desk-hot:#48c697; --desk-tint:#2a5248;
   --desk-hero:#153f35; --desk-art:-86deg;
 }
+[data-theme=plum], [data-theme-option=plum] {
+  --desk-bg:#191529; --desk-shell:#211933; --desk-panel:#2b2240; --desk-card:#33284c;
+  --desk-ink:#f6efff; --desk-dim:#d0c0e4; --desk-border:#5f4c7b; --desk-main:#6943a5;
+  --desk-hover:#7852b2; --desk-link:#dec1ff; --desk-hot:#d88be5; --desk-tint:#43305e;
+  --desk-hero:#3d245d; --desk-art:36deg;
+}
 [data-theme=night], [data-theme-option=night] {
   --desk-bg:#0b1630; --desk-shell:#102144; --desk-panel:#193467; --desk-card:#1d3a6e; --desk-main:#2b62c3; --desk-hot:#62caff; --desk-border:#426499; --desk-ink:#f0f6ff; --desk-dim:#b9cceb; --desk-link:#93d9ff; --desk-tint:#213c71;
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) {
   background:var(--desk-bg); color:var(--desk-ink);
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .app {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .app {
   --shell:var(--desk-shell); --panel:var(--desk-panel); --text:var(--desk-ink);
   --dim:var(--desk-dim); --border:var(--desk-border); --accent-blue:var(--desk-link);
   background:var(--desk-bg);
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) main.content { background:var(--desk-bg); }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.app .panel,.app .dashboard-calendar,.course-card,.login-card,.update-dialog) {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) main.content { background:var(--desk-bg); }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app .panel,.app .dashboard-calendar,.course-card,.login-card,.update-dialog) {
   background:var(--desk-panel); border-color:var(--desk-border); color:var(--desk-ink); box-shadow:none;
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.nav-popover,.window-controls button:hover,.mini-calendar-month,.app .document-file,.app .document-badge,.app .resume-state) {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.nav-popover,.window-controls button:hover,.mini-calendar-month,.app .document-file,.app .document-badge,.app .resume-state) {
   background:var(--desk-card); border-color:var(--desk-border); color:var(--desk-ink);
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.ghost,.course-picker button,.conversation-row,.message-bubble,.login-card input,.message-form input,.people-search input,.app select,#mini-events .item) {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.ghost,.course-picker button,.conversation-row,.message-bubble,.login-card input,.message-form input,.people-search input,.app select,#mini-events .item) {
   background:var(--desk-card); border-color:var(--desk-border); color:var(--desk-ink);
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.primary,.app-header .home-shortcut,.calendar-day[aria-pressed=true],.message-bubble.own) {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.primary,.app-header .home-shortcut,.calendar-day[aria-pressed=true],.message-bubble.own) {
   background:var(--desk-main); border-color:var(--desk-main); color:white; box-shadow:none;
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.primary:hover,.app-header .home-shortcut:hover){background:var(--desk-hover);}
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.app-header .nav:not(.home-shortcut):is(:hover,.active),.app-header details[open]>summary,.app-header summary:hover,.app .document-groups label:has(input:checked)){
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.primary:hover,.app-header .home-shortcut:hover){background:var(--desk-hover);}
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app-header .nav:not(.home-shortcut):is(:hover,.active),.app-header details[open]>summary,.app-header summary:hover,.app .document-groups label:has(input:checked)){
   background:var(--desk-tint); border-color:var(--desk-border); color:var(--desk-ink); box-shadow:none;
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.app .internal-link,.app .resource-block a,.app .eyebrow,.login-card .eyebrow,.app .text-link,.app .course-mark,.app .item-icon) {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app .internal-link,.app .resource-block a,.app .eyebrow,.login-card .eyebrow,.app .text-link,.app .course-mark,.app .item-icon) {
   color:var(--desk-link); text-decoration-color:currentColor;
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.app small,.app .muted,.login-card :is(label,small,.muted),.app .release-footer .client-caption,.release-footer .client-caption) {color:var(--desk-dim);}
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.release-footer span:not(.client-caption),.release-footer a) {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app small,.app .muted,.login-card :is(label,small,.muted),.app .release-footer .client-caption,.release-footer .client-caption) {color:var(--desk-dim);}
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.release-footer span:not(.client-caption),.release-footer a) {
   color:var(--desk-ink); background:var(--desk-shell); border-color:var(--desk-border);
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.window-controls button,.app .calendar-day:not([aria-pressed=true])) {color:var(--desk-ink);}
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.app .setting,.app .item) {border-color:var(--desk-border);}
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .login-screen {background:radial-gradient(ellipse at 70% 20%,var(--desk-tint),var(--desk-bg) 66%);}
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .study-hero {position:relative; isolation:isolate; background:var(--desk-hero);border-color:var(--desk-border);overflow:hidden;}
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .study-hero::before {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.window-controls button,.app .calendar-day:not([aria-pressed=true])) {color:var(--desk-ink);}
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app .setting,.app .item) {border-color:var(--desk-border);}
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .login-screen {background:radial-gradient(ellipse at 70% 20%,var(--desk-tint),var(--desk-bg) 66%);}
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .study-hero {position:relative; isolation:isolate; background:var(--desk-hero);border-color:var(--desk-border);overflow:hidden;}
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .study-hero::before {
   content:""; position:absolute; z-index:-1; inset:0; background:linear-gradient(90deg,var(--desk-hero),transparent 78%),url("study-banner.png") center/cover;
   filter:hue-rotate(var(--desk-art));
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.app progress,.update-dialog progress)::-webkit-progress-bar {background:var(--desk-tint);}
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.app progress:not(.document-meter),.update-dialog progress)::-webkit-progress-value {background:linear-gradient(90deg,var(--desk-main),var(--desk-hot));}
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) {scrollbar-color:var(--desk-border) transparent;}
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app progress,.update-dialog progress)::-webkit-progress-bar {background:var(--desk-tint);}
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app progress:not(.document-meter),.update-dialog progress)::-webkit-progress-value {background:linear-gradient(90deg,var(--desk-main),var(--desk-hot));}
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) {scrollbar-color:var(--desk-border) transparent;}
 /* Match navigation states and controls to the current palette. */
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .app-header :is(.nav, summary) { color: var(--desk-ink); }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .app-header .home-shortcut { color: #fff; }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .app-header details:has(.nav.active) > summary {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .app-header :is(.nav, summary) { color: var(--desk-ink); }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .app-header .home-shortcut { color: #fff; }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .app-header details:has(.nav.active) > summary {
   background: var(--desk-tint); border-color: var(--desk-border); color: var(--desk-ink); box-shadow: none;
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .account-menu > summary {
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .account-menu > summary {
   background: var(--desk-card); color: var(--desk-ink); border-color: var(--desk-border);
 }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .account-menu > summary:is(:hover,:focus-visible),
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .account-menu[open] > summary { background: var(--desk-tint); }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .account-menu .avatar { background: var(--desk-main); }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.app,.login-card,.update-dialog) :focus-visible { outline-color: var(--desk-link); }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .app .document-groups input { accent-color: var(--desk-main); }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.dashboard-scroll,.app main.content) { scrollbar-color: var(--desk-border) transparent; }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(#mini-events .item)::before { background: linear-gradient(var(--desk-hot),var(--desk-main)); }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) :is(.dashboard .item-icon,.app .course-mark) { background: var(--desk-tint); color: var(--desk-link); }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine]) .app :is(.internal-link,.resource-block a):is(:hover,:focus-visible) { color: var(--desk-link); text-decoration-thickness: 2px; }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .account-menu > summary:is(:hover,:focus-visible),
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .account-menu[open] > summary { background: var(--desk-tint); }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .account-menu .avatar { background: var(--desk-main); }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app,.login-card,.update-dialog) :focus-visible { outline-color: var(--desk-link); }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .app .document-groups input { accent-color: var(--desk-main); }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.dashboard-scroll,.app main.content) { scrollbar-color: var(--desk-border) transparent; }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(#mini-events .item)::before { background: linear-gradient(var(--desk-hot),var(--desk-main)); }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.dashboard .item-icon,.app .course-mark) { background: var(--desk-tint); color: var(--desk-link); }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .app :is(.internal-link,.resource-block a):is(:hover,:focus-visible) { color: var(--desk-link); text-decoration-thickness: 2px; }
 body.light .app .danger { background: #fff1f0; border-color: #e8b8b5; color: #8d292d; }
 body.light .app .danger:hover { background: #ffe4e2; }
 body.light .app .panel.settings { box-shadow: 0 12px 32px #2739540a; }
@@ -999,3 +1005,29 @@ body[data-theme=cream] .study-hero p { color:#fce5dc; }
 body[data-theme=cream] .app .theme-options .theme-option[data-theme-option=cream]:has(input:checked) {
   background:#fffaf6; border-color:#ac5844; box-shadow:inset 0 0 0 1px #ac5844;
 }
+
+.reader-layout { min-width:0; }
+.reader-layout.reader-split { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:clamp(12px,1.5vw,24px); align-items:start; }
+.reader-primary,.course-reference { min-width:0; overflow-wrap:anywhere; }
+.course-reference { position:sticky; top:12px; max-height:calc(100vh - 160px); overflow:auto; padding:clamp(12px,1.4vw,20px); }
+#course-reference-name { margin:7px 0 10px; }
+#course-reference-content > .internal-link { display:block; padding-block:7px; }
+#course-reference-content .resource-block { margin-top:8px; padding:12px; overflow:auto; }
+#course-reference-content h3 { margin-block:9px; }
+#course-reference-content .pdf-toolbar { gap:7px; margin-block:8px; }
+#course-reference-content .pdf-toolbar button { padding:6px 8px; }
+@media (max-width:800px) {
+  .reader-layout.reader-split { grid-template-columns:1fr; }
+  .course-reference { position:static; max-height:65vh; }
+}
+#course-reference-content :is(.pdf-page,.reader-book-page img) {
+  display:block; width:100%; max-width:100%; height:auto; max-height:none; object-fit:contain;
+}
+#course-reference-content .resource-block :is(img,video) { max-width:100%; height:auto; }
+#course-reference-content .pdf-toolbar { position:sticky; top:0; z-index:1; padding-block:5px; background:var(--panel); }
+
+body[data-theme=plum] .app { background: radial-gradient(ellipse at 88% 110%,#3a2353,transparent 60%),var(--desk-bg); }
+body[data-theme=plum] :is(.dashboard-cards > .panel,.dashboard .dashboard-calendar) {
+  background:linear-gradient(144deg,#33264b,var(--desk-panel) 70%); box-shadow:inset 0 1px 0 #b484ef22;
+}
+body[data-theme=plum] .calendar-day.has-events::after { background:#f7a4da; }

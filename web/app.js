@@ -11,6 +11,10 @@ let readerVersion = 0;
 let libraryPage = 0;
 let libraryQuery = '';
 const readerHistory = [];
+const activityModules = new Set(['quiz', 'assign', 'assignauto', 'assignpractice']);
+const isCourseActivity = item => activityModules.has(item.kind) || /^(?:практическ(?:ое занятие|ая работа|ое задание)|тест|(?:промежуточная |итоговая )?аттестация|(?:демонстрационный )?экзамен)(?:\s|:|$)/i.test(item.title);
+let courseReference = null;
+let referenceVersion = 0;
 const imageObserver = new IntersectionObserver(entries => {
   for (const entry of entries) {
     if (!entry.isIntersecting) continue;
@@ -58,6 +62,26 @@ let planVersion = 0;
 let notificationReads = Promise.resolve();
 let courseReturnPage = "courses";
 const progressCache = new Map();
+const dayCache = new Map();
+let homeCacheOwner = '';
+let cachedPrograms = [];
+let cachedPanels = {};
+let cacheTimer;
+function scheduleHomeCache() {
+  if (!homeCacheOwner) return;
+  clearTimeout(cacheTimer);
+  cacheTimer = setTimeout(() => {
+    window.pywebview.api.save_home_cache?.(homeCacheOwner, {
+      programs: cachedPrograms, plans: [...homePlanCache].slice(-20),
+      progress: [...progressCache].slice(-100), days: [...dayCache].slice(-28), panels: cachedPanels,
+    }).catch(() => {});
+  }, 250);
+}
+
+const homePlanCache = new Map();
+const sectionCache = new Map();
+const pendingProgress = new Set();
+let progressLoading = false;
 let dayVersion = 0;
 let selectedDay = new Date();
 let visibleMonth = new Date(selectedDay.getFullYear(), selectedDay.getMonth(), 1);
@@ -134,17 +158,21 @@ async function getPrograms() {
   return result.data;
 }
 
-async function fillPrograms(selector) {
-  if (selector.options.length) return;
-  const version = accountVersion;
-  const programs = await getPrograms();
-  if (version !== accountVersion || selector.options.length) return;
+function paintPrograms(selector, programs) {
   for (const program of programs) {
     const option = element('option', '', program.label || 'Программа ' + program.id);
     option.value = program.id;
     option.selected = program.active;
     selector.append(option);
   }
+}
+
+async function fillPrograms(selector) {
+  if (selector.options.length) return;
+  const version = accountVersion;
+  const programs = await getPrograms();
+  if (version !== accountVersion || selector.options.length) return;
+  paintPrograms(selector, programs);
 }
 
 function showPage(page, program = '') {
@@ -155,6 +183,7 @@ function showPage(page, program = '') {
     readerHistory.length = 0;
     ++readerVersion;
     $('reader-content').replaceChildren();
+    syncCourseReference(null);
   }
   document.querySelectorAll('.page').forEach(node => node.classList.toggle('hidden', node.id !== 'page-' + page));
   document.querySelectorAll('.nav').forEach(node => node.classList.toggle('active', node.dataset.page === page || page === 'course' && node.dataset.page === 'courses'));
@@ -185,7 +214,7 @@ async function loadCourseImage(image) {
   }
 }
 
-function renderSourceNode(value) {
+function renderSourceNode(value, follow = openMaterial) {
   if (typeof value === 'string') return document.createTextNode(value);
   const node = element(value.tag);
   for (const [key, data] of Object.entries(value.attrs)) {
@@ -206,10 +235,10 @@ function renderSourceNode(value) {
     node.href = '#';
     node.addEventListener('click', event => {
       event.preventDefault();
-      openMaterial(value.attrs.href, node.textContent.trim());
+      follow(value.attrs.href, node.textContent.trim());
     });
   }
-  node.append(...value.children.map(renderSourceNode));
+  node.append(...value.children.map(child => renderSourceNode(child, follow)));
   return node;
 }
 
@@ -221,8 +250,18 @@ async function showResource(section, title = '', url = '', program = '') {
   document.querySelectorAll('[data-section]').forEach(button => {
     button.classList.toggle('active', button.dataset.section === section || section === 'webinars' && button.dataset.section === 'library');
   });
-  $('resource-content').replaceChildren();
+  const content = $('resource-content');
   $('resource-title').textContent = title || sectionTitles[section];
+  const paint = data => {
+    content.replaceChildren();
+    if (data.title && !title) $('resource-title').textContent = data.title;
+    if (section === 'profile') renderProfile(data);
+    else if (section === 'webinars') renderWebinars(data);
+    else if (section === 'library') renderLibrary(data);
+    else appendBlocks(content, data.blocks);
+  };
+  let cached;
+  content.replaceChildren();
   $('resource-status').textContent = serverLoading;
   const needsProgram = programSections.has(section);
   const selector = $('resource-program');
@@ -233,6 +272,13 @@ async function showResource(section, title = '', url = '', program = '') {
       if (version !== resourceVersion) return;
     }
     if (needsProgram && program) selector.value = program;
+    const key = section !== 'material' ? JSON.stringify([section, needsProgram ? selector.value : '', url,
+      section === 'library' ? [libraryPage, libraryQuery] : null]) : null;
+    cached = key && sectionCache.get(key);
+    if (cached) {
+      paint(cached);
+      $('resource-status').textContent = 'Обновляю данные…';
+    }
     const api = window.pywebview.api;
     const result = section === 'library'
       ? await api.recordings(libraryPage, libraryQuery)
@@ -240,46 +286,113 @@ async function showResource(section, title = '', url = '', program = '') {
     if (version !== resourceVersion) return;
     if (!result.ok) throw Error(result.error);
     $('resource-status').textContent = '';
-    if (result.data.title && !title) $('resource-title').textContent = result.data.title;
-    if (section === 'profile') renderProfile(result.data);
-    else if (section === 'webinars') renderWebinars(result.data);
-    else if (section === 'library') renderLibrary(result.data);
-    else appendBlocks($('resource-content'), result.data.blocks);
+    if (key) {
+      sectionCache.set(key, result.data);
+      if (sectionCache.size > 24) sectionCache.delete(sectionCache.keys().next().value);
+    }
+    if (!cached || JSON.stringify(cached) !== JSON.stringify(result.data)) paint(result.data);
   } catch (error) {
-    if (version === resourceVersion) $('resource-status').textContent = error.message;
+    if (version === resourceVersion) $('resource-status').textContent =
+      cached ? 'Не удалось обновить. Показаны последние загруженные данные.' : error.message;
   }
 }
 
-function appendBlocks(target, blocks) {
+function appendBlocks(target, blocks, follow = openMaterial) {
   for (const block of blocks) {
     const panel = element('article', 'panel resource-block');
     if (block.tag === 'img') panel.classList.add('reader-book-page');
-    panel.append(renderSourceNode(block));
+    panel.append(renderSourceNode(block, follow));
     target.append(panel);
   }
 }
 
-function openMaterial(url, title) {
+function materialSection(url) {
   const address = new URL(url);
-  if (address.pathname === '/calendar/view.php' && address.searchParams.get('view') === 'day') {
-    openReader('calendar_day', title, url);
-    return;
-  }
-  if (address.hostname === 'sdo.vgaps.ru' && address.pathname === '/library.php') {
-    openReader('recording', title, url);
-    return;
-  }
-  const isPDF = address.pathname.endsWith('.pdf') || address.pathname === '/report/studybook/getpdf.php'
-    || (address.pathname === '/mod/gbooks/view.php' && address.searchParams.has('pdf'));
-  openReader(isPDF ? 'pdf' : 'material', title, url);
+  if (address.pathname === '/calendar/view.php' && address.searchParams.get('view') === 'day') return 'calendar_day';
+  if (address.hostname === 'sdo.vgaps.ru' && address.pathname === '/library.php') return 'recording';
+  return address.pathname.toLowerCase().endsWith('.pdf') || address.pathname === '/report/studybook/getpdf.php'
+    || (address.pathname === '/mod/gbooks/view.php' && address.searchParams.has('pdf')) ? 'pdf' : 'material';
 }
 
-function openReader(section, title, url, avatar = '') {
+function openMaterial(url, title, reference = null) {
+  openReader(materialSection(url), title, url, '', reference);
+}
+
+function syncCourseReference(reference) {
+  if (courseReference === reference) return;
+  ++referenceVersion;
+  courseReference = reference;
+  $('reader-layout').classList.toggle('reader-split', Boolean(reference));
+  const panel = $('course-reference');
+  panel.classList.toggle('hidden', !reference);
+  if (reference) {
+    $('course-reference-name').textContent = reference.course.title;
+    renderReferenceTopics();
+  } else {
+    $('course-reference-content').replaceChildren();
+  }
+}
+
+function renderReferenceTopics() {
+  if (!courseReference) return;
+  ++referenceVersion;
+  $('course-reference-back').classList.add('hidden');
+  const content = $('course-reference-content');
+  content.replaceChildren();
+  let heading = '';
+  for (const item of courseReference.topics) {
+    if (item.kind === 'раздел') {
+      heading = item.title;
+      continue;
+    }
+    if (!item.url || isCourseActivity(item) || ['forum', 'askquest'].includes(item.kind)) continue;
+    if (heading) {
+      content.append(element('h3', 'topic-section-title', heading));
+      heading = '';
+    }
+    const link = internalLink(item.title, () => openReferenceMaterial(item.url, item.title));
+    content.append(link);
+  }
+  if (!content.firstChild) empty(content, 'СДО не вернула материалы этого предмета.');
+  $('course-reference').scrollTop = 0;
+}
+
+async function openReferenceMaterial(url, title, pdfIndex = 0) {
+  if (!courseReference) return;
+  const version = ++referenceVersion;
+  const content = $('course-reference-content');
+  $('course-reference-back').classList.remove('hidden');
+  empty(content, serverLoading);
+  try {
+    const section = materialSection(url);
+    if ([...activityModules, 'forum', 'askquest'].includes(new URL(url).pathname.split('/')[2]) || !['material', 'pdf'].includes(section)) {
+      throw Error('Откройте учебный материал этого предмета из списка тем.');
+    }
+    const api = window.pywebview.api;
+    const result = section === 'pdf' ? await api.pdf_page(url, pdfIndex) : await api.student_section('material', '', url);
+    if (version !== referenceVersion) return;
+    if (!result.ok) throw Error(result.error);
+    content.replaceChildren(element('h3', '', result.data.title || title || 'Учебный материал'));
+    if (section === 'pdf') {
+      appendPdf(content, result.data, pdfIndex, index => openReferenceMaterial(url, title, index));
+    } else {
+      appendBlocks(content, result.data.blocks || [], openReferenceMaterial);
+      if (!result.data.blocks?.length) content.append(element('p', 'muted', 'СДО не вернула содержимое темы.'));
+    }
+    $('course-reference').scrollTop = 0;
+  } catch (error) {
+    if (version === referenceVersion) empty(content, error.message);
+  }
+}
+
+$('course-reference-back').addEventListener('click', renderReferenceTopics);
+
+function openReader(section, title, url, avatar = '', reference = null) {
   const current = document.querySelector('.page:not(.hidden)');
   const previous = readerHistory.at(-1);
   if (previous) previous.scroll = document.querySelector('main.content').scrollTop;
   readerHistory.push({
-    section, title, url, avatar,
+    section, title, url, avatar, reference: reference || previous?.reference || null,
     returnPage: current.id.slice(5),
     returnScroll: document.querySelector('main.content').scrollTop,
     scroll: 0, pdfIndex: 0,
@@ -291,6 +404,7 @@ async function renderReader() {
   const reading = readerHistory.at(-1);
   const version = ++readerVersion;
   showPage('reader');
+  syncCourseReference(reading.reference);
   const content = $('reader-content');
   content.replaceChildren();
   $('reader-title').textContent = reading.title;
@@ -299,7 +413,7 @@ async function renderReader() {
     const api = window.pywebview.api;
     const result = reading.section === 'pdf'
       ? await api.pdf_page(reading.url, reading.pdfIndex)
-      : await api.student_section(reading.section, '', reading.url);
+      : await api.student_section(reading.section, '', reading.url, reading.section === 'material');
     if (version !== readerVersion) return;
     if (!result.ok) throw Error(result.error);
     if (reading.section === 'pdf') renderPdf(result.data, reading);
@@ -543,23 +657,27 @@ function renderLibrary(data) {
   parent.append(paging);
 }
 
-function renderPdf(result, reading) {
+function appendPdf(target, result, index, turnPage) {
   const toolbar = element('div', 'pdf-toolbar');
   for (const [label, delta] of [['← Предыдущая', -1], ['Следующая →', 1]]) {
     const button = element('button', 'ghost', label);
-    button.disabled = reading.pdfIndex + delta < 0 || reading.pdfIndex + delta >= result.total;
-    button.onclick = () => {
-      reading.pdfIndex += delta;
-      reading.scroll = 0;
-      renderReader();
-    };
+    button.disabled = index + delta < 0 || index + delta >= result.total;
+    button.onclick = () => turnPage(index + delta);
     toolbar.append(button);
   }
-  toolbar.append(element('span', 'muted', (reading.pdfIndex + 1) + ' / ' + result.total));
+  toolbar.append(element('span', 'muted', (index + 1) + ' / ' + result.total));
   const image = element('img', 'pdf-page');
-  image.alt = 'Страница ' + (reading.pdfIndex + 1);
+  image.alt = 'Страница ' + (index + 1);
   image.src = result.image;
-  $('reader-content').append(toolbar, image);
+  target.append(toolbar, image);
+}
+
+function renderPdf(result, reading) {
+  appendPdf($('reader-content'), result, reading.pdfIndex, index => {
+    reading.pdfIndex = index;
+    reading.scroll = 0;
+    renderReader();
+  });
 }
 
 function renderWebinars(data) {
@@ -603,7 +721,7 @@ function renderProfile(data) {
   }
   $('resource-content').append(panel);
 }
-function renderItems(parent, items, kind) {
+function renderItems(parent, items, kind, follow = (url, title) => openMaterial(url, title)) {
   parent.replaceChildren();
   if (!items.length) { empty(parent, kind === 'deadline' ? 'Сроки пока недоступны. Проверьте задания в разделе «Курсы».' : 'Пока ничего нет.'); return; }
   for (const item of items) {
@@ -630,11 +748,13 @@ function renderItems(parent, items, kind) {
     if (kind === 'event' && item.id) {
       body.append(internalLink(item.title, () => openReader('event', item.title, String(item.id))));
     } else if (item.url && kind !== 'event') {
-      body.append(internalLink(item.title, () => openMaterial(item.url, item.title)));
+      body.append(internalLink(item.title, () => follow(item.url, item.title, item)));
     } else {
       body.append(element('strong', '', item.title));
     }
     const detail = item.when ? String(item.when) : item.description || '';
+    const lessonType = kind === 'event' ? calendarLessonLabel(item.title) : '';
+    if (lessonType.startsWith('Демонстрационный экзамен')) body.append(element('small', 'event-lesson-type', lessonType));
     if (detail) body.append(element('small', '', detail));
     if (item.completion) body.append(element('small', 'completion-note', item.completion));
     row.append(body);
@@ -680,59 +800,104 @@ function selectHomeProgram(id) {
 
 async function renderHomePrograms() {
   const version = accountVersion;
-  $('home-program-status').textContent = serverLoading;
-  try {
-    await fillPrograms($('nav-program'));
-    if (version !== accountVersion) return;
+  const selector = $('nav-program');
+  const show = () => {
     $('nav-program-label').classList.remove('hidden');
     $('home-program-status').textContent = '';
     showProgramName();
+  };
+  if (cachedPrograms.length) {
+    paintPrograms(selector, cachedPrograms);
+    show();
     loadHomePlan();
-  } catch (error) {
-    if (version === accountVersion) $('home-program-status').textContent = error.message;
+  } else {
+    $('home-program-status').textContent = serverLoading;
   }
+  try {
+    const programs = await getPrograms();
+    if (version !== accountVersion) return;
+    const previous = selector.value;
+    const hadCached = cachedPrograms.length > 0;
+    if (JSON.stringify(programs) !== JSON.stringify(cachedPrograms)) {
+      selector.replaceChildren();
+      paintPrograms(selector, programs);
+      if ([...selector.options].some(option => option.value === previous)) selector.value = previous;
+    }
+    cachedPrograms = programs;
+    show();
+    scheduleHomeCache();
+    if (!hadCached || selector.value !== previous) loadHomePlan();
+  } catch (error) {
+    if (version === accountVersion && !cachedPrograms.length) $('home-program-status').textContent = error.message;
+  }
+}
+
+function paintHomePlan(plan, items) {
+  plan.replaceChildren();
+  for (const item of items) {
+    const row = element('div', 'home-plan-row');
+    row.append(internalLink(item.title, () => openCurriculumCourse(item)));
+    const details = [item.hours, item.control].filter(Boolean);
+    if (item.teacher || details.length) {
+      const line = element('small');
+      if (item.teacher) line.append(curriculumTeacher(item));
+      if (details.length) line.append((item.teacher ? ' · ' : '') + details.join(' · '));
+      row.append(line);
+    }
+    plan.append(row);
+  }
+  if (!items.length) empty(plan, 'СДО не показала дисциплины для этой программы.');
 }
 
 async function loadHomePlan() {
   const version = ++planVersion;
   const program = $('nav-program').value;
   const plan = $('home-plan');
-  empty(plan, serverLoading);
+  const cached = homePlanCache.get(program);
+  if (cached) paintHomePlan(plan, cached);
+  else empty(plan, serverLoading);
   try {
     const result = await window.pywebview.api.curriculum(program);
     if (version !== planVersion) return;
     if (!result.ok) throw Error(result.error);
-    plan.replaceChildren();
-    for (const item of result.items) {
-      const row = element('div', 'home-plan-row');
-      row.append(internalLink(item.title, () => openCurriculumCourse(item)));
-      const details = [item.hours, item.control].filter(Boolean);
-      if (item.teacher || details.length) {
-        const line = element('small');
-        if (item.teacher) line.append(curriculumTeacher(item));
-        if (details.length) line.append((item.teacher ? ' · ' : '') + details.join(' · '));
-        row.append(line);
-      }
-      plan.append(row);
-    }
-    if (!result.items.length) empty(plan, 'СДО не показала дисциплины для этой программы.');
-    animateIn(plan);
+    if (!cached || JSON.stringify(cached) !== JSON.stringify(result.items)) paintHomePlan(plan, result.items);
+    homePlanCache.set(program, result.items);
+    scheduleHomeCache();
   } catch (error) {
-    if (version === planVersion) empty(plan, error.message);
+    if (version !== planVersion) return;
+    if (!cached) empty(plan, error.message);
+    else plan.append(element('p', 'muted', 'Не удалось обновить. Показан последний загруженный план.'));
+  }
+}
+
+async function drainProgress() {
+  if (progressLoading) return;
+  progressLoading = true;
+  try {
+    while (pendingProgress.size) {
+      const row = pendingProgress.values().next().value;
+      pendingProgress.delete(row);
+      if (row.isConnected && row.visibleProgress && !row.progressStarted) await row.loadProgress();
+    }
+  } finally {
+    progressLoading = false;
   }
 }
 
 const progressObserver = new IntersectionObserver(entries => {
   for (const entry of entries) {
-    if (!entry.isIntersecting) continue;
-    progressObserver.unobserve(entry.target);
-    entry.target.loadProgress();
+    const row = entry.target;
+    row.visibleProgress = entry.isIntersecting;
+    if (entry.isIntersecting && row.isConnected && !row.progressStarted) pendingProgress.add(row);
+    else pendingProgress.delete(row);
   }
+  drainProgress();
 }, {root: $('home-progress')});
 
 function renderProgress() {
   const version = ++progressVersion;
   progressObserver.disconnect();
+  pendingProgress.clear();
   const panel = $('home-progress');
   panel.replaceChildren();
   if (!model.courses.length) {
@@ -746,34 +911,39 @@ function renderProgress() {
     heading.append(internalLink(course.title, () => openCourse(course)), status);
     row.append(heading);
     panel.append(row);
+    const paint = ({completed, total}) => {
+      row.querySelector('progress')?.remove();
+      if (!total) {
+        status.textContent = 'Нет отметок СДО';
+        status.removeAttribute('title');
+        return;
+      }
+      status.textContent = Math.round(100 * completed / total) + '%';
+      status.title = `Выполнено тем с отметками СДО: ${completed} из ${total}`;
+      const bar = element('progress', 'study-progress');
+      bar.max = total;
+      bar.value = completed;
+      bar.setAttribute('aria-label', course.title + ' · выполнено тем с отметками СДО');
+      row.append(bar);
+    };
+    const cached = progressCache.get(course.url);
+    if (cached) paint(cached.data);
     row.loadProgress = async () => {
-      status.textContent = 'Загружаю…';
+      row.progressStarted = true;
+      progressObserver.unobserve(row);
+      if (cached && Date.now() - cached.time < 90_000) return;
+      if (!cached) status.textContent = 'Загружаю…';
       try {
-        let task = progressCache.get(course.url);
-        if (!task) {
-          task = window.pywebview.api.course_progress(course.url);
-          progressCache.set(course.url, task);
-        }
-        const result = await task;
+        const result = await window.pywebview.api.course_progress(course.url);
         if (version !== progressVersion) return;
-        if (!result.ok) {
-          progressCache.delete(course.url);
-          throw Error(result.error);
-        }
-        const {completed, total} = result.data;
-        if (!total) {
-          status.textContent = 'Нет отметок СДО';
-          return;
-        }
-        status.textContent = Math.round(100 * completed / total) + '%';
-        status.title = `Выполнено тем с отметками СДО: ${completed} из ${total}`;
-        const bar = element('progress', 'study-progress');
-        bar.max = total;
-        bar.value = completed;
-        bar.setAttribute('aria-label', course.title + ' · выполнено тем с отметками СДО');
-        row.append(bar);
+        if (!result.ok) throw Error(result.error);
+        progressCache.set(course.url, {data: result.data, time: Date.now()});
+        scheduleHomeCache();
+        paint(result.data);
       } catch {
-        if (version === progressVersion) status.textContent = 'Прогресс недоступен';
+        if (version !== progressVersion) return;
+        if (!cached) status.textContent = 'Прогресс недоступен';
+        else status.title = 'Не удалось обновить. Показан последний загруженный прогресс.';
       }
     };
     progressObserver.observe(row);
@@ -788,6 +958,15 @@ function eventDay(item) {
   if (!item.url) return '';
   const time = Number(new URL(item.url).searchParams.get('time'));
   return Number.isFinite(time) && time > 0 ? dayKey(new Date(time * 1000)) : '';
+}
+
+function calendarLessonLabel(name) {
+  const labels = {лк: 'Лекция', пз: 'Практическое занятие', семинар: 'Семинар', дэ: 'Демонстрационный экзамен'};
+  const suffix = name.match(/\s+\((лк|пз|семинар|дэ)\s*(\d*)\)\s*$/i)
+    || name.match(/(?:^|\s[–—-]\s|\s+)(дэ)\s*(\d*)\s*$/i);
+  if (!suffix) return '';
+  const label = labels[suffix[1].toLowerCase()];
+  return suffix[2] ? label + ' ' + suffix[2] : label;
 }
 
 function renderMiniEvents() {
@@ -805,16 +984,11 @@ function renderMiniEvents() {
     const time = times?.slice(0, 2).join(' – ') || item.when;
     if (time) body.append(element('small', 'event-time', time));
 
-    // Moodle webinar titles carry these abbreviations when the college specifies a lesson type.
-    const suffix = item.title.match(/\s+\((лк|пз|семинар)\s*(\d*)\)\s*$/i);
-    const labels = {лк: 'Лекция', пз: 'Практическое занятие', семинар: 'Семинар'};
-    const title = suffix ? item.title.slice(0, suffix.index) : item.title;
+    const title = item.title;
+    const label = calendarLessonLabel(title);
     if (item.id) body.append(internalLink(title, () => openReader('event', item.title, String(item.id))));
     else body.append(element('strong', '', title));
-    if (suffix) {
-      const label = labels[suffix[1].toLowerCase()];
-      body.append(element('small', 'event-lesson-type', suffix[2] ? `${label} ${suffix[2]}` : label));
-    }
+    if (label) body.append(element('small', 'event-lesson-type', label));
     row.append(body);
     list.append(row);
   }
@@ -850,10 +1024,12 @@ function renderMiniCalendar() {
 async function loadMiniDay(date, focus = false) {
   const version = ++dayVersion;
   selectedDay = date;
-  selectedDayEvents = null;
+  const key = dayKey(date);
+  const cached = dayCache.get(key);
+  selectedDayEvents = cached ?? null;
   renderMiniCalendar();
   if (focus) $('mini-days').querySelector('[aria-pressed=true]')?.focus();
-  empty($('mini-events'), serverLoading);
+  if (!cached) empty($('mini-events'), serverLoading);
   try {
     const time = Math.round(date.getTime() / 1000);
     const url = 'https://sdo.i-spo.ru/calendar/view.php?view=day&time=' + time;
@@ -861,9 +1037,12 @@ async function loadMiniDay(date, focus = false) {
     if (version !== dayVersion) return;
     if (!result.ok) throw Error(result.error);
     selectedDayEvents = result.data.events || [];
+    dayCache.delete(key);
+    dayCache.set(key, selectedDayEvents);
+    scheduleHomeCache();
     renderMiniEvents();
   } catch (error) {
-    if (version === dayVersion) empty($('mini-events'), error.message);
+    if (version === dayVersion && !cached) empty($('mini-events'), error.message);
   }
 }
 
@@ -889,7 +1068,10 @@ async function selectCourse(course) {
   if (!result.ok) { empty($('assignment-list'), result.error); return; }
   if (!result.data.items.length) { empty($('assignment-list'), 'СДО не вернула темы курса.'); return; }
   const topics = result.data.items.map(item => Object.assign({}, item, {description: materialLabels[item.kind] || ''}));
-  renderItems($('assignment-list'), topics, 'deadline');
+  const reference = {course, topics};
+  renderItems($('assignment-list'), topics, 'deadline', (url, title, item) => {
+    openMaterial(url, title, isCourseActivity(item) ? reference : null);
+  });
   if (result.data.overview.length) {
     const overview = element('section', 'course-overview');
     overview.append(element('h3', '', 'О дисциплине'));
@@ -938,9 +1120,18 @@ async function loadCurriculum(selectedProgram = '') {
   }
   if (!result.items.length) empty(list, 'Учебный план пока недоступен.');
 }
-function signedIn(result) {
-  ++accountVersion;
-  model = result.data;
+async function signedIn(result) {
+  const account = ++accountVersion;
+  const cache = await window.pywebview.api.load_home_cache?.().catch(() => ({})) || {};
+  if (account !== accountVersion) return;
+  homeCacheOwner = result.username;
+  cachedPrograms = cache.programs || [];
+  cachedPanels = cache.panels || {};
+  for (const [map, entries] of [[homePlanCache, cache.plans], [dayCache, cache.days], [progressCache, cache.progress]]) {
+    map.clear();
+    for (const [key, value] of entries || []) map.set(key, value);
+  }
+  model = {...result.data, ...cachedPanels.calendar};
   const name = result.data.profile?.name || result.username;
   const [surname, personal, patronymic] = name.trim().split(/\s+/);
   const initials = [personal, patronymic].filter(Boolean).map(word => Array.from(word)[0].toUpperCase() + '.');
@@ -950,13 +1141,43 @@ function signedIn(result) {
   $('client-caption').classList.remove('hidden');
   $('login').classList.add('hidden'); $('app').classList.remove('hidden');
   $('password').value = '';
-  render();
   renderHomePrograms();
+  render();
   loadMiniDay(selectedDay);
-  loadAccountAvatar(accountVersion);
+  loadDashboardPanels(accountVersion);
+  const avatar = model.profile?.avatar;
+  if (avatar) $('account-avatar').replaceChildren(teacherPhoto(avatar));
+  else loadAccountAvatar(accountVersion);
   const lastPage = sessionStorage.getItem('osek-page');
   if (lastPage && document.getElementById('page-' + lastPage)) showPage(lastPage);
   else showPage('home');
+}
+
+async function loadDashboardPanels(account) {
+  const api = window.pywebview.api;
+  if (!api.dashboard_panel) return;
+  empty($('home-deadlines'), serverLoading);
+  empty($('notifications-list'), serverLoading);
+  for (const panel of ['calendar', 'deadlines', 'notifications']) {
+    if (account !== accountVersion) break;
+    try {
+      const result = await api.dashboard_panel(panel);
+      if (account !== accountVersion) break;
+      if (!result.ok) throw Error(result.error);
+      Object.assign(model, result.data);
+      if (panel === 'calendar') { cachedPanels[panel] = result.data; scheduleHomeCache(); }
+      if (panel === 'calendar') renderMiniCalendar();
+      if (panel === 'deadlines') renderItems($('home-deadlines'), model.deadlines, 'deadline');
+      if (panel === 'notifications') {
+        renderNotificationCount();
+        renderItems($('notifications-list'), model.notifications, 'notification');
+      }
+    } catch (error) {
+      if (account !== accountVersion) break;
+      if (panel === 'deadlines') empty($('home-deadlines'), error.message);
+      if (panel === 'notifications') empty($('notifications-list'), error.message);
+    }
+  }
 }
 
 async function loadAccountAvatar(version) {
@@ -978,7 +1199,7 @@ async function init() {
     $('resume-state').classList.remove('hidden'); $('login-form').classList.add('hidden');
     const resumed = await window.pywebview.api.resume();
     $('resume-state').classList.add('hidden'); $('login-form').classList.remove('hidden');
-    if (resumed.ok) signedIn(resumed);
+    if (resumed.ok) await signedIn(resumed);
     else $('login-status').textContent = resumed.error || 'Не удалось войти автоматически';
   }
   $('autostart').checked = !!settings.autostart;
@@ -1184,11 +1405,16 @@ $('login-form').addEventListener('submit', async event => {
   event.preventDefault();
   $('login-status').textContent = 'Подключаюсь к sdo.i-spo.ru';
   const result = await window.pywebview.api.login($('username').value, $('password').value);
-  if (result.ok) { $('login-status').textContent = ''; signedIn(result); }
+  if (result.ok) { $('login-status').textContent = ''; await signedIn(result); }
   else $('login-status').textContent = result.error || 'Не удалось войти';
 });
 $('logout').addEventListener('click', async () => {
   await window.pywebview.api.logout();
+  clearTimeout(cacheTimer);
+  homeCacheOwner = '';
+  cachedPrograms = [];
+  cachedPanels = {};
+  dayCache.clear();
   chosenDocument = null;
   renderDocumentInfo();
   renderDocumentResults();
@@ -1204,6 +1430,9 @@ $('logout').addEventListener('click', async () => {
   ++planVersion;
   progressObserver.disconnect();
   progressCache.clear();
+  homePlanCache.clear();
+  sectionCache.clear();
+  pendingProgress.clear();
   ++dayVersion;
   selectedDayEvents = null;
   selectedDay = new Date();
@@ -1233,7 +1462,7 @@ $('logout').addEventListener('click', async () => {
   $('password').value = '';
 });
 function applyAppearance(theme) {
-  const safe = ['night', 'cobalt', 'cream', 'pine'].includes(theme) ? theme : 'night';
+  const safe = ['night', 'cobalt', 'cream', 'pine', 'plum'].includes(theme) ? theme : 'night';
   document.body.dataset.theme = safe;
   document.body.classList.toggle('light', safe === 'cobalt' || safe === 'cream');
   $('theme-options').querySelector('input[value="' + safe + '"]').checked = true;

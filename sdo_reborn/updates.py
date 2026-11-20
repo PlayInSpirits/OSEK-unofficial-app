@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from zipfile import ZipFile
 
 import requests
@@ -149,11 +150,23 @@ def start_installer(executable: Path, script: Path, stage: Path):
         "PYINSTALLER_RESET_ENVIRONMENT": "1",
     })
     command = base64.b64encode(script.read_text(encoding="utf-8").encode("utf-16-le")).decode("ascii")
-    subprocess.Popen(
+    helper = subprocess.Popen(
         [str(program), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", command],
         env=env, cwd=str(executable.parent), creationflags=subprocess.CREATE_NO_WINDOW,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
+    # Only close the current app after the helper has validated its inputs.
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline:
+        if helper.poll() is not None:
+            break
+        if (stage / "installer-ready").is_file():
+            return
+        time.sleep(0.1)
+    if helper.poll() is None:
+        helper.kill()
+        helper.wait(timeout=5)
+    raise UpdateError("Не удалось запустить установщик. Приложение осталось открытым.")
 
 
 def stage_update(release, executable: Path, script: Path, progress):

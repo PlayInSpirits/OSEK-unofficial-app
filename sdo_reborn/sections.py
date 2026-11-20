@@ -1,6 +1,7 @@
 """Read the student-facing sections without running the site's JavaScript."""
 
 import re
+import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
@@ -114,13 +115,27 @@ class StudentSections:
         self.client = client
         self.files = files
         self.home = None
+        self._courses = {}
+        self._curriculum = {}
+        self._programs = None
         self.calendar_html = ""
         self.meeting_months = {}
         self.meeting_subscriptions = {}
         self.forms = ActivityForms(client)
         self.library = WebinarLibrary(client, project_content)
 
-    def course(self, url):
+    def curriculum(self, program):
+        cached = self._curriculum.get(program)
+        if cached and time.monotonic() - cached[0] < 120:
+            return cached[1]
+        items = self.client.curriculum(program)
+        self._curriculum[program] = (time.monotonic(), items)
+        return items
+
+    def _course_data(self, url):
+        cached = self._courses.get(url)
+        if cached and time.monotonic() - cached[0] < 90:
+            return cached[1]
         html = self.client._get(url)
         items = self.client.topics(url, html)
         soup = BeautifulSoup(html, "html.parser")
@@ -129,7 +144,19 @@ class StudentSections:
             "#region-main .course-content .activityinline .description-inner"
         )
         overview = [project_content(node, url) for node in lead if node.get_text(strip=True)]
-        return {"items": items, "overview": overview}
+        data = {"items": items, "overview": overview}
+        self._courses[url] = (time.monotonic(), data)
+        if len(self._courses) > 50:
+            del self._courses[next(iter(self._courses))]
+        return data
+
+    def course_progress(self, url):
+        items = self._course_data(url)["items"]
+        tracked = [item["completed"] for item in items if item.get("completed") is not None]
+        return {"completed": sum(tracked), "total": len(tracked)}
+
+    def course(self, url):
+        return self._course_data(url)
 
     def recordings(self, page, title):
         return self.library.catalog(self._home(), page, title)
@@ -196,6 +223,8 @@ class StudentSections:
         return self.home
 
     def programs(self):
+        if self._programs is not None:
+            return self._programs
         rows = []
         seen = set()
         for item in self._home().select(".side-nav .myprograms"):
@@ -207,6 +236,7 @@ class StudentSections:
                 if url.path == "/" and set(query) == {"pid"} and pid.isdecimal() and pid not in seen:
                     seen.add(pid)
                     rows.append({"id": pid, "label": label.get_text(" ", strip=True) if label else "", "active": "active" in link.get("class", [])})
+        self._programs = rows
         return rows
 
     def _section_url(self, section, program):
@@ -457,7 +487,7 @@ class StudentSections:
             if parsed.path != "/" or query.get("action") != ["bbb_calendar"] or set(query) - {"action", "time", "view"}:
                 raise SDOError("Некорректная ссылка календаря вебинаров")
         if section == "material":
-            response = self.client._authenticated_response(url)
+            response = self.client._authenticated_response(url, headers={"Cache-Control": "no-cache, no-store"})
             soup = BeautifulSoup(response.text, "html.parser")
             if urlparse(response.url).path == "/message/index.php":
                 return {"blocks": [], "contact": self.student_contact(response.url)}

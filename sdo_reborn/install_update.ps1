@@ -18,7 +18,12 @@ $launched = $null
 $parentExited = $false
 $cleanup = $false
 try {
+    if (![IO.File]::Exists($exe) -or ![IO.Directory]::Exists($internal) -or
+        ![IO.File]::Exists($newExe) -or ![IO.Directory]::Exists($newInternal)) {
+        throw 'Required update files are missing.'
+    }
     $parent = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+    [IO.File]::WriteAllText((Join-Path $stage 'installer-ready'), '')
     if ($parent -and !$parent.WaitForExit(45000)) { throw 'The application did not exit.' }
     $parentExited = $true
     $other = Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($exe)) -ErrorAction SilentlyContinue |
@@ -31,8 +36,8 @@ try {
     [IO.File]::Move($newExe, $exe)
 
     $env:OSEK_UPDATE_READY = $ready
-    $launched = Start-Process -FilePath $exe -WorkingDirectory $install -WindowStyle Hidden -PassThru
-    Remove-Item Env:OSEK_UPDATE_READY
+    $launched = Start-Process -FilePath $exe -WorkingDirectory $install -WindowStyle Normal -PassThru
+    Remove-Item Env:OSEK_UPDATE_READY -ErrorAction SilentlyContinue
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while (![IO.File]::Exists($ready)) {
         if ($launched.HasExited -or [DateTime]::UtcNow -ge $deadline) { throw 'The updated interface did not start.' }
@@ -57,7 +62,7 @@ try {
         [IO.File]::WriteAllText($env:OSEK_UPDATE_ERROR, 'Обновление не завершилось. Прежняя версия сохранена.')
         if ($parentExited -and !(Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($exe)) -ErrorAction SilentlyContinue |
                        Where-Object { $_.Path -eq $exe })) {
-            Start-Process -FilePath $exe -WorkingDirectory $install -WindowStyle Hidden
+            Start-Process -FilePath $exe -WorkingDirectory $install -WindowStyle Normal
         }
         $cleanup = $true
     } catch {
