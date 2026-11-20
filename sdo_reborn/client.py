@@ -381,8 +381,42 @@ class SDOClient:
             raise SDOError("СДО не вернула список тем этого курса")
         result = []
         seen = set()
-        for link in course.select('.sectionname, a[href*="/mod/"]'):
+        restrictions_selector = ".availabilityinfo, .activity-availability, [data-region='availabilityinfo']"
+        restricted = {}
+        for activity in course.select(".activity"):
+            notice = activity.select_one(restrictions_selector)
+            name = activity.select_one(".activityname, .activityinstance, .instancename")
+            if not notice or not name or not notice.get_text(strip=True):
+                continue
+            actual_link = name if name.name == "a" else name.select_one('a[href*="/mod/"]')
+            if actual_link and actual_link.get("href"):
+                continue
+            title_node = name.select_one(".instancename") or name
+            title = " ".join(part.strip() for part in title_node.strings
+                             if part.strip() and not part.find_parent(class_="accesshide"))
+            if not title:
+                continue
+            module = next((cls[8:] for cls in activity.get("class", []) if cls.startswith("modtype_")), "")
+            topics = list(dict.fromkeys(
+                link.get_text(" ", strip=True) for link in notice.select("a, strong, b")
+                if link.get_text(strip=True)
+            ))
+            conditions = list(dict.fromkeys(row.get_text(" ", strip=True) for row in notice.select("li") if row.get_text(strip=True)))
+            if not conditions:
+                conditions = [notice.get_text(" ", strip=True)]
+            if title and (module or re.search(r"тест|задание|экзамен|аттестаци", title, re.I)):
+                if not module:
+                    module = "quiz" if "тест" in title.casefold() else "assign"
+                restricted[id(activity)] = {"title": title, "url": "", "kind": module,
+                                            "locked": True, "conditions": conditions, "required_topics": topics}
+        for link in course.select('.sectionname, .activity, a[href*="/mod/"]'):
             if link.find_parent(class_="activityinline"):
+                continue
+            if "activity" in link.get("class", []):
+                if id(link) in restricted:
+                    result.append(restricted[id(link)])
+                continue
+            if link.find_parent(class_=lambda cls: cls in {"availabilityinfo", "activity-availability"}) or link.find_parent(attrs={"data-region": "availabilityinfo"}):
                 continue
             if "sectionname" in link.get("class", []):
                 title = link.get_text(" ", strip=True)

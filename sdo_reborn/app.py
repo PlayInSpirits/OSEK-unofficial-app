@@ -318,7 +318,7 @@ class Bridge:
             return {"ok": False, "error": str(error)}
 
     def topics(self, course_url: str):
-        return self._section_operation("course", self.student_sections.course, course_url)
+        return self._section_operation("course", self.student_sections.course, course_url, priority=True)
 
     def course_progress(self, course_url: str):
         return self._section_operation("course_progress", self.student_sections.course_progress, course_url)

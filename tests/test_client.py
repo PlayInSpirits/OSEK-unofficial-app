@@ -1,9 +1,41 @@
 import unittest
 
-from sdo_reborn.client import SDOError, parse_courses, parse_events, safe_url
+from sdo_reborn.client import SDOClient, SDOError, parse_courses, parse_events, safe_url
 
 
 class ParserTests(unittest.TestCase):
+    def test_locked_quiz_stays_in_its_section_without_an_open_link(self):
+        html = """
+        <main id="region-main"><div class="course-content">
+          <h3 class="sectionname">Раздел 2</h3>
+          <li class="activity modtype_book">
+            <div class="activityinstance"><a href="/mod/book/view.php?id=22">Тема 2.2</a></div>
+          </li>
+          <li class="activity modtype_quiz">
+            <div class="activityname"><span class="instancename">Тестовые вопросы к разделу 2
+              <span class="accesshide">Тест</span></span></div>
+            <div class="availabilityinfo">Недоступно: <ul>
+              <li>Элемент курса <a href="/mod/book/view.php?id=22">Тема 2.2</a> должен быть отмечен как выполненный</li>
+              <li>Элемент курса <strong>Тема 2.3</strong> должен быть отмечен как выполненный</li>
+            </ul></div>
+          </li>
+          <h3 class="sectionname">Раздел 3</h3>
+          <li class="activity modtype_quiz">
+            <div class="activityname"><a href="/mod/quiz/view.php?id=33">Открытый тест</a></div>
+            <div class="availabilityinfo">Пояснение</div>
+          </li>
+        </div></main>
+        """
+        topics = SDOClient().topics("/course/view.php?id=1", html)
+        self.assertEqual([item["title"] for item in topics],
+                         ["Раздел 2", "Тема 2.2", "Тестовые вопросы к разделу 2", "Раздел 3", "Открытый тест"])
+        locked = topics[2]
+        self.assertTrue(locked["locked"])
+        self.assertEqual(locked["url"], "")
+        self.assertEqual(locked["kind"], "quiz")
+        self.assertEqual(locked["required_topics"], ["Тема 2.2", "Тема 2.3"])
+        self.assertNotIn("locked", topics[-1])
+
     def test_courses_deduplicate_and_ignore_other_hosts(self):
         html = '''<a href="/course/view.php?id=42" title="Безопасность">курс</a>
                   <a href="https://sdo.i-spo.ru/course/view.php?id=42">дубликат</a>

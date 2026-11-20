@@ -742,8 +742,8 @@ function renderItems(parent, items, kind, follow = (url, title) => openMaterial(
       parent.append(details);
       continue;
     }
-    const row = element('div', 'item');
-    row.append(element('div', 'item-icon', kind === 'event' ? '◷' : kind === 'deadline' ? '✓' : '✦'));
+    const row = element('div', item.locked ? 'item item-locked' : 'item');
+    row.append(element('div', 'item-icon', item.locked ? '🔒' : kind === 'event' ? '◷' : kind === 'deadline' ? '✓' : '✦'));
     const body = element('div', 'item-body');
     if (kind === 'event' && item.id) {
       body.append(internalLink(item.title, () => openReader('event', item.title, String(item.id))));
@@ -756,6 +756,16 @@ function renderItems(parent, items, kind, follow = (url, title) => openMaterial(
     const lessonType = kind === 'event' ? calendarLessonLabel(item.title) : '';
     if (lessonType.startsWith('Демонстрационный экзамен')) body.append(element('small', 'event-lesson-type', lessonType));
     if (detail) body.append(element('small', '', detail));
+    if (item.locked) {
+      const conditions = item.conditions || [];
+      const topics = item.required_topics || [];
+      const simple = topics.length > 0 && conditions.length === topics.length &&
+        conditions.every((condition, index) => condition.includes(topics[index]) &&
+          /отмечен как выполненн|marked complete|marked as complete/i.test(condition));
+      const reason = simple ? 'Нужно пройти: ' + topics.join('; ')
+        : conditions.join('; ').replace(/^Недоступно[^:]*:\s*/i, '');
+      body.append(element('small', 'locked-note', reason ? 'Недоступно. ' + reason : 'Недоступно'));
+    }
     if (item.completion) body.append(element('small', 'completion-note', item.completion));
     row.append(body);
     parent.append(row);
@@ -1058,14 +1068,16 @@ function openCourse(course) {
   selectCourse(course);
 }
 
-async function selectCourse(course) {
+let displayedCourse = null;
+async function selectCourse(course, keepVisible = false) {
   const version = ++topicVersion;
+  displayedCourse = course;
   logAction('course', course.id);
   $('course-heading').textContent = course.title;
-  empty($('assignment-list'), 'Загружаю темы…');
+  if (!keepVisible) empty($('assignment-list'), 'Загружаю темы…');
   const result = await window.pywebview.api.topics(course.url);
   if (version !== topicVersion) return;
-  if (!result.ok) { empty($('assignment-list'), result.error); return; }
+  if (!result.ok) { if (!keepVisible) empty($('assignment-list'), result.error); return; }
   if (!result.data.items.length) { empty($('assignment-list'), 'СДО не вернула темы курса.'); return; }
   const topics = result.data.items.map(item => Object.assign({}, item, {description: materialLabels[item.kind] || ''}));
   const reference = {course, topics};
@@ -1395,6 +1407,9 @@ $('reader-back').addEventListener('click', () => {
     renderReader();
   } else {
     showPage(reading.returnPage);
+    if (reading.returnPage === 'course' && displayedCourse && $('assignment-list').querySelector('.item-locked')) {
+      selectCourse(displayedCourse, true);
+    }
     if (reading.returnPage === 'resources') {
       document.querySelector(`[data-section="${activeResource}"]`)?.classList.add('active');
     }

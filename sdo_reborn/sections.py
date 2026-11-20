@@ -132,9 +132,9 @@ class StudentSections:
         self._curriculum[program] = (time.monotonic(), items)
         return items
 
-    def _course_data(self, url):
+    def _course_data(self, url, refresh=False):
         cached = self._courses.get(url)
-        if cached and time.monotonic() - cached[0] < 90:
+        if not refresh and cached and time.monotonic() - cached[0] < 90:
             return cached[1]
         html = self.client._get(url)
         items = self.client.topics(url, html)
@@ -156,7 +156,7 @@ class StudentSections:
         return {"completed": sum(tracked), "total": len(tracked)}
 
     def course(self, url):
-        return self._course_data(url)
+        return self._course_data(url, refresh=True)
 
     def recordings(self, page, title):
         return self.library.catalog(self._home(), page, title)

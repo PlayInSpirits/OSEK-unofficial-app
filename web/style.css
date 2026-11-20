@@ -1031,3 +1031,6 @@ body[data-theme=plum] :is(.dashboard-cards > .panel,.dashboard .dashboard-calend
   background:linear-gradient(144deg,#33264b,var(--desk-panel) 70%); box-shadow:inset 0 1px 0 #b484ef22;
 }
 body[data-theme=plum] .calendar-day.has-events::after { background:#f7a4da; }
+
+.item-locked .item-icon { background:var(--desk-tint, var(--panel)); font-size:.92em; }
+.item-locked .locked-note { color:var(--dim); line-height:1.45; overflow-wrap:anywhere; }
