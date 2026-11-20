@@ -527,7 +527,25 @@ function makeActivityWidget(widget) {
   if (widget.kind === 'radio' || widget.kind === 'checkbox') {
     input.checked = widget.checked;
     label.classList.add('activity-choice');
-    label.append(input, element('span', '', widget.label));
+    if (widget.kind === 'checkbox' && (/:flagged$/i.test(widget.name) ||
+        /отметить вопрос|снять отметку|flag question/i.test(widget.label))) {
+      label.classList.add('activity-flag');
+      const icon = element('span', 'activity-flag-icon');
+      icon.setAttribute('aria-hidden', 'true');
+      const text = element('span');
+      const sync = () => { text.textContent = input.checked ? 'Вопрос отмечен' : 'Отметить вопрос'; };
+      input.addEventListener('change', sync);
+      sync();
+      label.append(input, icon, text);
+      return label;
+    }
+    const caption = element('span', 'activity-answer-caption');
+    if (widget.caption?.length) caption.append(...widget.caption.map(node => renderSourceNode(node)));
+    else caption.textContent = widget.label;
+    const answer = element('span', 'activity-answer-line');
+    if (widget.number) answer.append(element('span', 'activity-answer-number', widget.number));
+    answer.append(caption);
+    label.append(input, answer);
   } else {
     label.append(element('span', '', widget.label), input);
   }
@@ -570,8 +588,16 @@ function renderActivityForm(data, reading) {
     controls.append(pick, remove, selection);
   }
   for (const group of data.groups) {
-    if (group.content) controls.append(renderSourceNode(group.content));
-    for (const widget of group.widgets) controls.append(makeActivityWidget(widget));
+    const target = group.question ? element('section', 'activity-question') : controls;
+    if (group.content) {
+      if (group.question) {
+        const question = element('div', 'activity-question-text');
+        question.append(renderSourceNode(group.content));
+        target.append(question);
+      } else target.append(renderSourceNode(group.content));
+    }
+    for (const widget of group.widgets) target.append(makeActivityWidget(widget));
+    if (group.question) controls.append(target);
   }
   for (const [index, text] of data.buttons.entries()) {
     const button = element('button', 'primary', text);
@@ -601,7 +627,7 @@ function renderActivityForm(data, reading) {
       document.querySelector('main.content').scrollTop = 0;
     } catch (error) {
       if (version !== readerVersion) return;
-      status.textContent = error.message;
+      status.textContent = error.message + ' Введённые ответы пока остаются на экране. Перед обновлением формы перепишите их.';
       const reload = element('button', 'ghost', 'Обновить форму');
       reload.type = 'button';
       reload.onclick = renderReader;
@@ -1153,6 +1179,7 @@ async function signedIn(result) {
   $('client-caption').classList.remove('hidden');
   $('login').classList.add('hidden'); $('app').classList.remove('hidden');
   $('password').value = '';
+  refreshUpdateDisplay().catch(() => {});
   renderHomePrograms();
   render();
   loadMiniDay(selectedDay);
@@ -1208,6 +1235,7 @@ async function init() {
   const result = await window.pywebview.api.bootstrap();
   $('username').value = result.username || '';
   if (result.saved) {
+    checkUpdateOnSignIn();
     $('resume-state').classList.remove('hidden'); $('login-form').classList.add('hidden');
     const resumed = await window.pywebview.api.resume();
     $('resume-state').classList.add('hidden'); $('login-form').classList.remove('hidden');
@@ -1221,9 +1249,12 @@ async function init() {
 
 const updateDialog = $('update-dialog');
 let updateBusy = false;
-let updateResult = null;
-let promptedUpdate = null;
-let releasePaintGeneration = 0;
+let updateRetryAfter = 0;
+
+function checkUpdateOnSignIn() {
+  window.pywebview.api.refresh_update().then(refreshUpdateDisplay)
+    .catch(() => logAction('ui_error', 'release_status_failed'));
+}
 
 function paintUpdateProgress(progress) {
   for (const id of ['settings-update-progress', 'dialog-update-progress']) {
@@ -1233,37 +1264,19 @@ function paintUpdateProgress(progress) {
   }
 }
 
-function paintRelease(result) {
-  updateResult = result;
-  const version = result.version ? `v0.${result.version}` : '';
-  const label = result.name || version;
-  $('settings-update-status').textContent = result.failure || (version
-    ? `Доступно обновление ${label}${label.includes(version) ? '' : ' · ' + version}`
-    : result.ok ? 'Установлена актуальная версия.' : 'Проверяю наличие обновлений…');
-  $('settings-install-update').classList.toggle('hidden', !result.automatic);
-  $('dialog-install-update').classList.toggle('hidden', !result.automatic);
-  const fallback = $('settings-manual-update');
-  fallback.classList.toggle('hidden', !result.url || result.automatic);
-  if (result.url) fallback.href = result.url;
-  else fallback.removeAttribute('href');
-  if (!version && updateDialog.open) updateDialog.close();
-  if (version && result.prompts && promptedUpdate !== version && document.visibilityState === 'visible') {
-    promptedUpdate = version;
-    $('update-release-name').textContent = label;
-    $('update-dialog-status').textContent = result.automatic
-      ? 'Скачать и установить новую версию?' : 'Скачивание доступно со страницы релиза в Настройках.';
-    if (!updateDialog.open) updateDialog.showModal();
-  }
-}
-
 async function refreshUpdateDisplay() {
-  if (updateBusy) return;
-  const generation = ++releasePaintGeneration;
+  if (updateBusy || Date.now() < updateRetryAfter) return;
   const result = await window.pywebview.api.check_for_update();
-  if (!updateBusy && generation === releasePaintGeneration &&
-      (result.failure || !updateResult || JSON.stringify(result) !== JSON.stringify(updateResult) ||
-       result.prompts && result.version && promptedUpdate !== `v0.${result.version}`)) {
-    paintRelease(result);
+  if (updateBusy || Date.now() < updateRetryAfter) return;
+  const version = result.version ? 'v0.' + result.version : '';
+  $('settings-update-status').textContent = result.failure || (version
+    ? (result.automatic ? 'Доступна версия ' + version : 'Автоустановка недоступна для этой сборки.')
+    : result.ok ? 'Установлена актуальная версия.' : 'Проверяю наличие обновлений…');
+  if (!$('app').classList.contains('hidden') && version && result.automatic && !result.failure) {
+    $('update-release-name').textContent = result.name || version;
+    await installAvailableUpdate();
+  } else if (!version && result.ok && updateDialog.open) {
+    updateDialog.close();
   }
 }
 
@@ -1278,48 +1291,17 @@ async function showReleaseStatus() {
   });
 }
 
-$('check-update').addEventListener('click', async () => {
-  const button = $('check-update');
-  button.disabled = true;
-  $('settings-update-status').textContent = 'Проверяю наличие обновлений…';
-  try {
-    const result = await window.pywebview.api.refresh_update();
-    if (!result.ok) throw Error('Не удалось проверить наличие обновлений.');
-    if (!updateBusy) paintRelease(await window.pywebview.api.check_for_update());
-  } catch (error) {
-    if (!updateBusy) $('settings-update-status').textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
-
-$('update-close').addEventListener('click', () => updateDialog.close());
-$('never-prompt-update').addEventListener('click', async () => {
-  const button = $('never-prompt-update');
-  button.disabled = true;
-  try {
-    const result = await window.pywebview.api.dismiss_update_prompts();
-    if (!result.ok) throw Error('Не удалось сохранить настройку уведомлений.');
-    updateDialog.close();
-  } catch (error) {
-    $('update-dialog-status').textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
-updateDialog.addEventListener('cancel', event => {
-  if (updateBusy) event.preventDefault();
-});
+updateDialog.addEventListener('cancel', event => event.preventDefault());
 
 async function installAvailableUpdate() {
   if (updateBusy) return;
   updateBusy = true;
-  const actions = ['settings-install-update', 'dialog-install-update', 'never-prompt-update', 'update-close'];
-  actions.forEach(id => { $(id).disabled = true; });
   const status = text => {
     $('settings-update-status').textContent = text;
     $('update-dialog-status').textContent = text;
   };
+  status('Скачиваю новую версию. Приложение перезапустится автоматически.');
+  if (!updateDialog.open) updateDialog.showModal();
   try {
     const api = window.pywebview.api;
     const result = await api.install_update();
@@ -1334,19 +1316,17 @@ async function installAvailableUpdate() {
           return;
         }
         const percent = Math.floor(100 * progress.received / progress.total);
-        status(percent >= 100 ? 'Проверяю и распаковываю обновление…' : `Скачиваю обновление · ${percent}%`);
+        status(percent >= 100 ? 'Проверяю и распаковываю обновление…' : 'Скачиваю обновление · ' + percent + '%');
       }
       await new Promise(resolve => setTimeout(resolve, 240));
     }
   } catch (error) {
+    updateRetryAfter = Date.now() + 30_000;
     updateBusy = false;
     paintUpdateProgress(null);
-    status(error.message || 'Не удалось установить обновление.');
-    actions.forEach(id => { $(id).disabled = false; });
+    status((error.message || 'Не удалось установить обновление.') + ' Повторю автоматически через 30 секунд.');
   }
 }
-$('dialog-install-update').addEventListener('click', installAvailableUpdate);
-$('settings-install-update').addEventListener('click', installAvailableUpdate);
 
 for (const group of navGroups) {
   group.querySelector('summary').addEventListener('click', () => closeNavigation(group));
@@ -1419,6 +1399,7 @@ $('reader-back').addEventListener('click', () => {
 $('login-form').addEventListener('submit', async event => {
   event.preventDefault();
   $('login-status').textContent = 'Подключаюсь к sdo.i-spo.ru';
+  checkUpdateOnSignIn();
   const result = await window.pywebview.api.login($('username').value, $('password').value);
   if (result.ok) { $('login-status').textContent = ''; await signedIn(result); }
   else $('login-status').textContent = result.error || 'Не удалось войти';
@@ -1512,6 +1493,7 @@ window.setWindowMaximized = maximized => {
   button.setAttribute('aria-label', label);
 };
 function windowCommand(command) {
+  if (command === 'close' && updateDialog.open) return;
   window.pywebview?.api?.window_command(command);
 }
 for (const [id, command] of [['window-minimize', 'minimize'], ['window-maximize', 'toggle_maximize'], ['window-close', 'close']]) {

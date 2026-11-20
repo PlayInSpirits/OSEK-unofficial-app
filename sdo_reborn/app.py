@@ -30,7 +30,6 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 MUTED_NOTIFICATIONS = LOG_DIR / "notifications-muted"
 APPEARANCE_FILE = LOG_DIR / "appearance.txt"
 APPEARANCES = {"night", "cobalt", "cream", "pine", "plum"}
-HIDE_UPDATE_PROMPTS = LOG_DIR / "hide-update-prompts"
 
 
 def resource_path(name: str) -> Path:
@@ -82,7 +81,7 @@ class Bridge:
         "search_people", "send_to_user", "mark_conversation_read", "mark_notification_read",
         "recordings", "activity_pick", "activity_submit", "app_version", "check_for_update",
         "logout", "settings", "set_autostart", "set_notification_sounds", "course_progress",
-        "window_command", "refresh_update", "dismiss_update_prompts", "install_update", "update_progress",
+        "window_command", "refresh_update", "install_update", "update_progress",
         "document_pick", "document_check", "document_check_progress", "document_open_link", "set_appearance",
         "set_meeting_subscription",
     )
@@ -204,7 +203,7 @@ class Bridge:
         return {
             "ok": result["ok"], "version": result.get("version"), "name": result.get("name"),
             "url": result.get("url"), "automatic": bool(getattr(sys, "frozen", False) and result.get("sha256")),
-            "prompts": not HIDE_UPDATE_PROMPTS.exists() and not failure, "failure": failure,
+            "failure": failure,
         }
 
     def refresh_update(self):
@@ -214,19 +213,12 @@ class Bridge:
                 self._release_status = result
         return {"ok": result["ok"]}
 
-    def dismiss_update_prompts(self):
-        try:
-            HIDE_UPDATE_PROMPTS.touch()
-            return {"ok": True}
-        except OSError:
-            return {"ok": False}
-
     def update_progress(self):
         return self._update_progress
 
     def install_update(self):
         release = self._release_status
-        if not getattr(sys, "frozen", False) or not release.get("sha256") or not release.get("version"):
+        if not self.client.username or not getattr(sys, "frozen", False) or not release.get("sha256") or not release.get("version"):
             return {"ok": False, "error": "Автоматическая установка этой версии недоступна."}
         if not self._install_lock.acquire(blocking=False):
             return {"ok": False, "error": "Обновление уже выполняется."}
@@ -602,6 +594,8 @@ class Bridge:
             return False
 
     def _closing(self):
+        if not self._quitting and self._install_lock.locked():
+            return False
         if not self._quitting and self._tray and self._tray.visible:
             self.window.hide()
             return False

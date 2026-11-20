@@ -49,10 +49,15 @@ INLINE_IMAGE = re.compile(r"data:image/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/
 def project_content(node, base):
     if isinstance(node, NavigableString):
         return str(node) if type(node) is NavigableString else ""
-    if node.name in IGNORED_TAGS or node.has_attr("hidden"):
+    if (node.name in IGNORED_TAGS or node.has_attr("hidden")
+            or node.get("aria-hidden") == "true"
+            or re.search(r"(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\b", node.get("style", ""), re.I)):
         return ""
     classes = set(node.get("class", []))
     if {"sr-only", "accesshide", "course-content"}.intersection(classes):
+        return ""
+    if (classes.intersection({"d-none", "hidden", "hide", "invisible"})
+            or node.get("id") in {"connection-error", "connection-ok", "quiz-timer-wrapper"}):
         return ""
     if "cont_video" in classes:
         # The remote player supplies its own buttons and timers in sibling nodes.
@@ -108,6 +113,14 @@ def project_content(node, base):
     if schedule_classes:
         attrs["class"] = " ".join(sorted(schedule_classes))
     return {"tag": node.name, "attrs": attrs, "children": children}
+
+
+def has_projected_content(node):
+    if isinstance(node, str):
+        return bool(node.strip())
+    return node["tag"] in {"img", "video", "audio"} or any(
+        has_projected_content(child) for child in node["children"]
+    )
 
 
 class StudentSections:
@@ -192,7 +205,7 @@ class StudentSections:
         title = soup.select_one("#page-header h1")
         module = urlparse(url).path.split("/")[2]
         forms = self.forms.describe(soup, url, project_content)
-        blocks = self._material_blocks(soup, url)
+        blocks = self._material_blocks(soup, url, allow_empty=bool(forms))
         if module in UPLOAD_MODULES:
             for form in soup.select("#region-main form[method='get'][action]"):
                 action = urlparse(urljoin(url, form["action"]))
@@ -256,7 +269,7 @@ class StudentSections:
             raise SDOError("СДО не показала ссылку на этот раздел для текущей учётной записи")
         return safe_url(link["href"])
 
-    def _material_blocks(self, soup, url):
+    def _material_blocks(self, soup, url, allow_empty=False):
         if urlparse(url).path == "/mod/gbooks/view.php":
             book = soup.select_one("#wowbook")
             pages = book.select('img[src*="/mod_gbooks/pages/"]') if book else []
@@ -289,8 +302,10 @@ class StudentSections:
                     raise SDOError("HTML файл материала не содержит текста для отображения")
                 result.append(project_content(document.body, response.url))
             else:
-                result.append(project_content(block, url))
-        if not result:
+                projected = project_content(block, url)
+                if has_projected_content(projected):
+                    result.append(projected)
+        if not result and not allow_empty:
             raise SDOError("СДО не вернула содержимое учебного материала")
         return result
 

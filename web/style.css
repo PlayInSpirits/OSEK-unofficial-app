@@ -146,9 +146,6 @@ body.light .notification-card[open] summary {
 .internal-link {
   color: #bdc0ff;
   font-weight: 650;
-  text-decoration: underline;
-  text-underline-offset: .22em;
-  text-decoration-color: #8289c6;
 }
 .internal-link:hover, .internal-link:focus-visible {
   color: #fff;
@@ -541,9 +538,9 @@ main.content {
   box-shadow: inset 0 1px 0 #8bbdff1c;
 }
 .light .dashboard-cards > .panel { border-color: #86a7dc; box-shadow: none; }
-.app:not(.hidden) .internal-link, .app .resource-block a { color: #69d9ff; text-decoration-color: #49a9d8; }
+.app:not(.hidden) .internal-link, .app .resource-block a { color: #69d9ff; }
 .app .internal-link:is(:hover,:focus-visible), .app .resource-block a:hover { color: #bbf0ff; }
-.light .app .internal-link, .light .app .resource-block a { color: #075c91; text-decoration-color: #397aa4; }
+.light .app .internal-link, .light .app .resource-block a { color: #075c91; }
 .light .app .internal-link:is(:hover,:focus-visible), .light .app .resource-block a:hover { color: #043d69; }
 .dashboard-cards #home-program-status:empty { display: none; }
 .progress-list { display: grid; gap: 16px; }
@@ -630,7 +627,6 @@ main.content {
 #mini-events .event-time { margin-top: 0; font-size: 1.12rem; font-weight: 650; font-variant-numeric: tabular-nums; }
 #mini-events .event-lesson-type { margin-top: 0; }
 #mini-events .internal-link { color: var(--text); text-decoration: none; line-height: 1.35; }
-#mini-events .internal-link:is(:hover,:focus-visible) { text-decoration: underline; }
 #mini-events .item-icon { display: none; }
 .release-footer { left: 16px; right: 16px; justify-content: flex-end; }
 .release-footer span, .release-footer a { background: #132c5c; color: #dfedff; border-color: #395c96; }
@@ -891,7 +887,7 @@ body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plu
   background:var(--desk-tint); border-color:var(--desk-border); color:var(--desk-ink); box-shadow:none;
 }
 body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app .internal-link,.app .resource-block a,.app .eyebrow,.login-card .eyebrow,.app .text-link,.app .course-mark,.app .item-icon) {
-  color:var(--desk-link); text-decoration-color:currentColor;
+  color:var(--desk-link);
 }
 body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.app small,.app .muted,.login-card :is(label,small,.muted),.app .release-footer .client-caption,.release-footer .client-caption) {color:var(--desk-dim);}
 body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.release-footer span:not(.client-caption),.release-footer a) {
@@ -925,7 +921,7 @@ body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plu
 body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.dashboard-scroll,.app main.content) { scrollbar-color: var(--desk-border) transparent; }
 body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(#mini-events .item)::before { background: linear-gradient(var(--desk-hot),var(--desk-main)); }
 body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) :is(.dashboard .item-icon,.app .course-mark) { background: var(--desk-tint); color: var(--desk-link); }
-body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .app :is(.internal-link,.resource-block a):is(:hover,:focus-visible) { color: var(--desk-link); text-decoration-thickness: 2px; }
+body:is([data-theme=cobalt],[data-theme=cream],[data-theme=pine],[data-theme=plum]) .app :is(.internal-link,.resource-block a):is(:hover,:focus-visible) { color: var(--desk-link); }
 body.light .app .danger { background: #fff1f0; border-color: #e8b8b5; color: #8d292d; }
 body.light .app .danger:hover { background: #ffe4e2; }
 body.light .app .panel.settings { box-shadow: 0 12px 32px #2739540a; }
@@ -1034,3 +1030,40 @@ body[data-theme=plum] .calendar-day.has-events::after { background:#f7a4da; }
 
 .item-locked .item-icon { background:var(--desk-tint, var(--panel)); font-size:.92em; }
 .item-locked .locked-note { color:var(--dim); line-height:1.45; overflow-wrap:anywhere; }
+
+.activity-question {
+  display:grid; gap:4px; min-width:0; padding:clamp(10px,1.2vw,18px);
+  border:1px solid var(--border); border-radius:12px;
+}
+.activity-question-text {
+  min-width:0; padding:10px 12px; margin-bottom:6px; border:1px solid var(--border);
+  border-radius:8px; background:var(--shell); color:var(--text);
+}
+.activity-question-text :is(p,div):first-child { margin-top:0; }
+.activity-question-text :is(p,div):last-child { margin-bottom:0; }
+.activity-answer-line { display:flex; align-items:baseline; gap:.35em; min-width:0; }
+.activity-answer-number { flex:none; }
+.activity-answer-caption { min-width:0; overflow-wrap:anywhere; }
+.activity-answer-caption :is(p,div):first-child { margin-top:0; }
+.activity-answer-caption :is(p,div):last-child { margin-bottom:0; }
+
+.activity-flag {
+  align-self:start; justify-self:start; position:relative; padding:4px 8px; margin-bottom:4px;
+  border:1px solid transparent; border-radius:7px; cursor:pointer;
+}
+.activity-flag:has(input:focus-visible) { outline:2px solid var(--accent-blue); outline-offset:2px; }
+.activity-flag:has(input:checked) { border-color:#d94552; background:#d9455221; }
+.activity-flag input { position:absolute; width:1px; height:1px; opacity:0; }
+.activity-flag-icon {
+  display:inline-block; flex:none; width:19px; height:19px; color:#f1485a;
+  background:currentColor;
+  clip-path:polygon(5% 5%,20% 5%,20% 10%,94% 10%,76% 37%,94% 65%,20% 65%,20% 95%,5% 95%,5% 5%,20% 10%,20% 20%,20% 55%,74% 55%,62% 37%,74% 20%,20% 20%,20% 10%);
+}
+.activity-flag:has(input:checked) .activity-flag-icon {
+  clip-path:polygon(5% 5%,20% 5%,20% 10%,94% 10%,76% 37%,94% 65%,20% 65%,20% 95%,5% 95%);
+}
+body.light .activity-flag-icon { color:#bc263a; }
+.activity-flag:has(input:checked) > span:last-child { font-weight:700; }
+
+/* Links use color and keyboard focus rather than underlining. */
+a, .internal-link { text-decoration: none; }

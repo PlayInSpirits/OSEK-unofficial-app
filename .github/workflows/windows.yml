@@ -32,19 +32,26 @@ jobs:
           python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx --name ОСЭК-Remastered --icon assets/icon.ico --add-data "web:web" --add-data "assets/icon.png:assets" --add-data "sdo_reborn/install_update.ps1:sdo_reborn" --collect-all webview --collect-all pypdfium2 --collect-all pypdfium2_raw --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path -LiteralPath 'dist/ОСЭК-Remastered/ОСЭК-Remastered.exe')) { throw 'Executable missing' }
-          Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/ОСЭК-Remastered/ОСЭК-Remastered.exe' | ForEach-Object { "$($_.Hash.ToLower())  ОСЭК-Remastered.exe" } | Set-Content -Encoding utf8 'dist/SHA256.txt'
-          Compress-Archive -Path 'dist/ОСЭК-Remastered' -DestinationPath 'dist/OSEK-Remastered-Windows.zip' -Force
+          Compress-Archive -Path 'dist/ОСЭК-Remastered' -DestinationPath "dist/OSEK-Remastered-v0.$version.zip" -Force
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: OSEK-Remastered-Windows
-          path: |
-            dist/OSEK-Remastered-Windows.zip
-            dist/SHA256.txt
+          path: dist/OSEK-Remastered-v0.*.zip
       - name: Publish versioned release
         if: github.ref_type == 'tag' && startsWith(github.ref_name, 'OSEK-v0.')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release create $env:GITHUB_REF_NAME 'dist/OSEK-Remastered-Windows.zip' 'dist/SHA256.txt' --verify-tag --title "ОСЭК-Remastered $env:GITHUB_REF_NAME" --notes=
+          $version = (Get-Content -LiteralPath 'web/version.txt' -Raw).Trim()
+          $notesFile = Join-Path $env:RUNNER_TEMP 'osek-release-notes.md'
+          @'
+          > [!NOTE]
+          > Большинство функций работают стабильно и надлежащим образом.
+          > Некоторые функции могут отсутствовать.
+
+          > [!WARNING]
+          > Это неофициальный клиент [Открытого социально-экономического колледжа](https://sdo.i-spo.ru). Приложение создано без согласования с администрацией колледжа, не имеет к ней отношения и её одобрения. Вы используете его на свой страх и риск, соблюдая при этом правила колледжа. В работе приложения возможны ошибки.
+          '@ | Set-Content -LiteralPath $notesFile -Encoding utf8
+          gh release create $env:GITHUB_REF_NAME "dist/OSEK-Remastered-v0.$version.zip" --verify-tag --title "ОСЭК-Remastered-v0.$version" --notes-file $notesFile

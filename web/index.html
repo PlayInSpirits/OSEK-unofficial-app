@@ -252,11 +252,7 @@
       </div><small id="theme-status" role="status"></small></fieldset><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting update-setting">
           <div><strong>Обновление приложения</strong><small id="settings-update-status" aria-live="polite">Проверяю наличие обновлений…</small>
             <progress id="settings-update-progress" class="hidden" max="100" aria-label="Ход скачивания обновления"></progress></div>
-          <div class="update-actions">
-            <button id="check-update" type="button" class="ghost">Проверить</button>
-            <button id="settings-install-update" type="button" class="primary hidden">Обновить</button>
-            <a id="settings-manual-update" class="internal-link hidden" target="_blank" rel="noopener">Страница релиза</a>
-          </div>
+
         </div><div class="setting"><span><strong>Учётная запись</strong><small>Удалить сохранённый вход с этого компьютера</small></span><button id="logout" class="danger">Выйти</button></div><div class="setting"><span><strong>Журнал диагностики</strong><small id="log-path">Загрузка пути…</small></span></div></div><p class="muted note">Журнал записывает переходы и ошибки без пароля и текста сообщений.</p></section>
     </main>
   </div>
@@ -265,15 +261,10 @@
     <span id="app-version"></span>
   </footer>
   <dialog id="update-dialog" class="update-dialog" aria-labelledby="update-heading">
-    <button id="update-close" class="update-close" type="button" aria-label="Закрыть окно обновления">×</button>
-    <h2 id="update-heading">Доступно обновление</h2>
+    <h2 id="update-heading">Устанавливаю обновление</h2>
     <p id="update-release-name" class="update-release-name"></p>
-    <p id="update-dialog-status" aria-live="polite">Скачать и установить новую версию?</p>
+    <p id="update-dialog-status" aria-live="polite">Готовлю загрузку. После установки приложение откроется снова.</p>
     <progress id="dialog-update-progress" class="hidden" max="100" aria-label="Ход скачивания обновления"></progress>
-    <div class="update-actions">
-      <button id="dialog-install-update" type="button" class="primary">Обновить</button>
-      <button id="never-prompt-update" type="button" class="ghost">Больше не показывать</button>
-    </div>
   </dialog>
   <script src="app.js"></script>
 </body>

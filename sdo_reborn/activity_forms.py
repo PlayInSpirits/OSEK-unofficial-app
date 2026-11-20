@@ -1,6 +1,7 @@
 """Study forms backed by the current Moodle session."""
 
 import json
+from copy import copy
 import re
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -16,6 +17,43 @@ UPLOAD_MODULES = {"assign", "assignauto", "assignpractice"}
 FORM_TARGETS = {f"/mod/{module}/view.php" for module in UPLOAD_MODULES}
 FORM_TARGETS.update({"/mod/quiz/startattempt.php", "/mod/quiz/processattempt.php"})
 SUPPORTED_QUESTIONS = {"multichoice", "truefalse", "shortanswer", "numerical", "match", "essay", "description"}
+
+
+def answer_label(node, form):
+    # Moodle may put the caption in a sibling and link it through ARIA
+    # instead of emitting a <label for="...">.
+    def meaningful(tag):
+        return tag and (tag.get_text(" ", strip=True) or tag.select_one("img"))
+
+    label = form.find("label", attrs={"for": node["id"]}) if node.get("id") else None
+    if not meaningful(label) and not node.get("id"):
+        label = node.find_parent("label")
+    if not meaningful(label):
+        ids = node.get("aria-labelledby", "").split()
+        references = [form.find(id=target) for target in ids]
+        references = [tag for tag in references if meaningful(tag)]
+        if references:
+            return " ".join(tag.get_text(" ", strip=True) for tag in references).strip(), references
+        label = node.find_parent("label")
+    if not meaningful(label) and node.get("type") in {"radio", "checkbox"}:
+        row = node.find_parent(class_=lambda value: value and re.fullmatch(r"r\d+", value))
+        if row:
+            label = row.select_one(".flex-fill, [data-region='answer-text'], .answertext")
+    if meaningful(label):
+        return label.get_text(" ", strip=True), [label]
+    return node.get("aria-label") or node.get("placeholder") or "Ответ", []
+
+
+def answer_caption(labels, row, project, url):
+    captions = [copy(tag) for tag in labels]
+    marker = row.select_one(".answernumber") if row else None
+    number = marker.get_text(" ", strip=True) if marker else ""
+    for caption in captions:
+        for duplicate in caption.select(".answernumber"):
+            if not number:
+                number = duplicate.get_text(" ", strip=True)
+            duplicate.decompose()
+    return number, [project(tag, url) for tag in captions]
 
 
 class ActivityForms:
@@ -75,16 +113,20 @@ class ActivityForms:
                     if node.has_attr("disabled") or kind not in {"text", "password", "number", "checkbox", "radio", "textarea", "select"}:
                         continue
                     name = node["name"]
-                    loc = form.find("label", attrs={"for": node.get("id")}) if node.get("id") else None
-                    label = loc.get_text(" ", strip=True) if loc else (node.get("aria-label") or node.get("placeholder") or "Ответ")
+                    label, labels = answer_label(node, form)
                     options = [{"value": opt.get("value", ""), "label": opt.get_text(" ", strip=True)} for opt in node.select("option:not([disabled])")]
                     value = node.get_text() if kind == "textarea" else node.get("value", "1" if kind in {"checkbox", "radio"} else "")
                     if kind == "select":
                         selected = node.select_one("option[selected]") or node.select_one("option")
                         value = selected.get("value", "") if selected else ""
+                    number, caption = ("", [])
+                    if kind in {"radio", "checkbox"}:
+                        row = node.find_parent(class_=lambda value: value and re.fullmatch(r"r\d+", value))
+                        number, caption = answer_caption(labels, row, project, url)
                     widgets.append({
                         "name": name, "kind": kind, "label": label, "value": value,
                         "checked": node.has_attr("checked"), "options": options,
+                        "caption": caption, "number": number,
                     })
                     if kind == "select":
                         allowed.setdefault(name, set()).update(option["value"] for option in options)
@@ -93,7 +135,7 @@ class ActivityForms:
                     else:
                         allowed[name] = None
                 question = area.select_one(".qtext") if questions else None
-                groups.append({"content": project(question, url) if question else "", "widgets": widgets})
+                groups.append({"content": project(question, url) if question else "", "widgets": widgets, "question": bool(questions)})
             token = uuid4().hex
             self.pending[token] = (url, action, hidden, upload, allowed, buttons)
             while len(self.pending) > 35:
