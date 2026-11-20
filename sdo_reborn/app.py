@@ -395,7 +395,8 @@ class Bridge:
             return {"ok": False, "error": "Хранилище учётных данных Windows недоступно."}
 
     def study_ai(self, scope, payload):
-        return self._study_ai.run(self.client.username, "question", scope, payload, self._study_config())
+        kind = "quiz" if isinstance(payload, dict) and "questions" in payload else "question"
+        return self._study_ai.run(self.client.username, kind, scope, payload, self._study_config())
 
     def study_pdf_summary(self, scope, url):
         config = self._study_config()

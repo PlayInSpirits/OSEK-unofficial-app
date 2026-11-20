@@ -605,7 +605,7 @@ function curriculumTeacher(item) {
   return internalLink(item.teacher, () => openReader('teacher', item.teacher, item.teacher_url, item.teacher_avatar));
 }
 
-const questionAICooldownMs = 30_000;
+const questionAICooldownMs = 60_000;
 let questionAIUntil = 0;
 let questionAIPending = false;
 let questionAITimer = null;
@@ -737,6 +737,7 @@ function renderActivityForm(data, reading) {
     };
     controls.append(pick, remove, selection);
   }
+  const quizQuestions = [];
   for (const group of data.groups) {
     const target = group.question ? element('section', 'activity-question') : controls;
     if (group.content) {
@@ -751,23 +752,30 @@ function renderActivityForm(data, reading) {
       const control = makeActivityWidget(widget);
       target.append(control);
       if (widget.number && ['radio', 'checkbox'].includes(widget.kind)) {
-        choices.push({control, text: control.querySelector('.activity-answer-caption')?.textContent.trim()});
+        choices.push({control, kind: widget.kind, text: control.querySelector('.activity-answer-caption')?.textContent.trim()});
       }
     }
     const questionText = target.querySelector('.activity-question-text');
-    if (group.question && questionText && choices.length > 1 && choices.every(choice => choice.text)) {
-      const question = questionText.textContent.trim();
-      const tools = element('div', 'study-question-tools');
-      questionText.append(tools);
-      const url = new URL(reading.originalUrl || reading.url);
-      const quizId = url.searchParams.get('cmid') || url.searchParams.get('id');
-      const scope = quizId ? 'module:' + url.pathname.split('/')[2] + ':' + quizId
-        : url.pathname + ':' + (url.searchParams.get('attempt') || '');
-      addStudyButton(tools, 'Режим ИИ', () => window.pywebview.api.study_ai(scope, {
-        question, options: choices.map((choice, index) => ({id:index, text:choice.text})),
-      }), ids => choices.forEach((choice,index) => choice.control.classList.toggle('study-ai-suggested',ids.includes(index))), true);
+    if (group.question && questionText?.textContent.trim() && choices.length > 1 && choices.every(choice => choice.text)) {
+      quizQuestions.push({question: questionText.textContent.trim(), choices});
     }
     if (group.question) controls.append(target);
+  }
+  if (quizQuestions.length) {
+    const tools = element('div', 'study-question-tools');
+    controls.prepend(tools);
+    const url = new URL(reading.originalUrl || reading.url);
+    const quizId = url.searchParams.get('cmid') || url.searchParams.get('id') || url.searchParams.get('attempt') || '';
+    const questions = quizQuestions.map(({question, choices}, id) => ({
+      id, question, multiple: choices.every(choice => choice.kind === 'checkbox'),
+      options: choices.map(({text}, optionId) => ({id: optionId, text})),
+    }));
+    addStudyButton(tools, 'Режим ИИ', () => window.pywebview.api.study_ai('quiz:' + quizId, {questions}), answers => {
+      for (const {questionId, optionIds} of answers) {
+        quizQuestions[questionId].choices.forEach(({control}, id) =>
+          control.classList.toggle('study-ai-suggested', optionIds.includes(id)));
+      }
+    }, true);
   }
   for (const [index, text] of data.buttons.entries()) {
     const button = element('button', 'primary', text);
