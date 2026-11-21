@@ -23,6 +23,8 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Build executable
         shell: pwsh
+        env:
+          PYTHONUTF8: '1'
         run: |
           $version = (Get-Content -LiteralPath 'web/version.txt' -Raw).Trim()
           if ($version -notmatch '^[1-9][0-9]*$') { throw 'Invalid app version' }
