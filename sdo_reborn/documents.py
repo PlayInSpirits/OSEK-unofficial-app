@@ -118,25 +118,28 @@ class StudentFiles:
         return "\n\n".join(parts)
 
     def pdf_page(self, url, index):
-        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-            raise SDOError("Неверный номер страницы")
-        self._load_pdf(url)
-        try:
-            with pypdfium2.PdfDocument(self.pdf_data) as document:
-                total = len(document)
-                if index >= total:
-                    raise SDOError("Такой страницы в PDF нет")
-                page = document[index]
+        return render_pdf_page(self.pdf_document(url), index)
+
+
+def render_pdf_page(pdf, index):
+    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+        raise SDOError("Неверный номер страницы")
+    try:
+        with pypdfium2.PdfDocument(pdf) as document:
+            total = len(document)
+            if index >= total:
+                raise SDOError("Такой страницы в PDF нет")
+            page = document[index]
+            try:
+                scale = min(2, 2400 / max(page.get_width(), page.get_height()))
+                bitmap = page.render(scale=scale)
                 try:
-                    scale = min(2, 2400 / max(page.get_width(), page.get_height()))
-                    bitmap = page.render(scale=scale)
-                    try:
-                        png = io.BytesIO()
-                        bitmap.to_pil().save(png, format="PNG")
-                    finally:
-                        bitmap.close()
+                    png = io.BytesIO()
+                    bitmap.to_pil().save(png, format="PNG")
                 finally:
-                    page.close()
-        except pypdfium2.PdfiumError:
-            raise SDOError("Не удалось прочитать PDF СДО") from None
-        return {"image": data_url(png.getvalue(), "image/png"), "total": total}
+                    bitmap.close()
+            finally:
+                page.close()
+    except pypdfium2.PdfiumError:
+        raise SDOError("Не удалось прочитать PDF СДО") from None
+    return {"image": data_url(png.getvalue(), "image/png"), "total": total}

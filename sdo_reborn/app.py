@@ -76,7 +76,8 @@ class SessionLock:
 
 class Bridge:
     PUBLIC_METHODS = (
-        "study_ai", "study_pdf_summary", "study_ai_settings", "save_study_ai_settings",
+        "study_ai", "study_pdf_topics", "study_summary_page", "save_study_summary_pdf",
+        "study_ai_settings", "save_study_ai_settings", "manage_study_ai_keys",
         "bootstrap", "resume", "login", "refresh", "dashboard_panel", "load_home_cache", "save_home_cache", "topics", "curriculum",
         "programs", "student_section", "course_image", "pdf_page", "log_event",
         "get_log_path", "conversations", "conversation_messages", "send_message",
@@ -95,6 +96,7 @@ class Bridge:
     def __init__(self):
         self.client = SDOClient()
         self._study_ai = StudyAI(LOG_DIR / "study-ai.sqlite3")
+        self._study_keys_lock = threading.Lock()
         self.files = StudentFiles(self.client)
         self.student_sections = StudentSections(self.client, self.files)
         self.window = None
@@ -354,28 +356,41 @@ class Bridge:
     def set_meeting_subscription(self, identity, subscribed):
         return self._section_operation("meeting_subscription", self.student_sections.set_meeting_subscription, identity, subscribed)
 
-    def _study_config(self):
+    def _study_keys(self):
+        empty = {"active": "", "profiles": {}}
         if not self.client.username:
-            return {}
-        try:
-            config = json.loads(keyring.get_password(SERVICE + "-study-ai", self.client.username) or "{}")
-            if not isinstance(config, dict):
-                return {}
-            if config.get("mode") == "groq":
-                return {"mode": "gemini"}
+            return empty
+        config = json.loads(keyring.get_password(SERVICE + "-study-ai", self.client.username) or "{}")
+        if isinstance(config.get("profiles"), dict):
             return config
+        if config.get("key") and config.get("mode") in ("gemini", "relay"):
+            config["name"] = "Gemini" if config["mode"] == "gemini" else "Сервер ОСЭК"
+            return {"active": "legacy", "profiles": {"legacy": config}}
+        return empty
+
+    def _study_config(self):
+        try:
+            state = self._study_keys()
+            return state["profiles"].get(state["active"], {})
         except Exception:
             return {}
 
     def study_ai_settings(self):
-        config = self._study_config()
-        return {"mode": config.get("mode", "relay" if os.environ.get("OSEK_AI_URL") else "gemini"), "url": config.get("url", ""), "hasKey": bool(config.get("key"))}
+        state = self._study_keys()
+        return {"active": state["active"], "profiles": [
+            {"id": identity, "name": profile["name"], "mode": profile["mode"]}
+            for identity, profile in state["profiles"].items()
+        ]}
 
-    def save_study_ai_settings(self, mode, url, key, clear=False):
+    def save_study_ai_settings(self, mode, url, key, name):
         from urllib.parse import urlsplit
-        if not self.client.username or mode not in ("gemini", "relay") or not isinstance(url, str) or not isinstance(key, str):
+        from uuid import uuid4
+        username = self.client.username
+        if not username or mode not in ("gemini", "relay") or not all(isinstance(value, str) for value in (url, key, name)):
             return {"ok": False, "error": "Некорректные настройки ИИ."}
-        url, key = url.strip(), key.strip()
+        url, key, name = url.strip(), key.strip(), name.strip()
+        if not name or len(name) > 60 or not key:
+            return {"ok": False, "error": "Введите ключ и название длиной до 60 символов."}
         try:
             if mode == "relay" and url:
                 parsed = urlsplit(url)
@@ -383,31 +398,107 @@ class Bridge:
                     raise ValueError()
             if len(key) > 1024 or any(not 33 <= ord(c) <= 126 for c in key):
                 raise ValueError()
-            previous = self._study_config()
-            if not key and not clear and previous.get("mode") == mode:
-                key = previous.get("key", "")
-            keyring.set_password(SERVICE + "-study-ai", self.client.username,
-                                 json.dumps({"mode": mode, "url": url if mode == "relay" else "", "key": key}))
+            with self._study_keys_lock:
+                state = self._study_keys()
+                identity = uuid4().hex
+                state["profiles"][identity] = {"name": name, "mode": mode, "url": url if mode == "relay" else "", "key": key}
+                state["active"] = identity
+                keyring.set_password(SERVICE + "-study-ai", username, json.dumps(state, ensure_ascii=False))
             return {"ok": True}
         except ValueError:
             return {"ok": False, "error": "Проверьте HTTPS-адрес и формат ключа."}
         except Exception:
-            return {"ok": False, "error": "Хранилище учётных данных Windows недоступно."}
+            return {"ok": False, "error": "Не удалось сохранить ключ в хранилище учётных данных Windows."}
 
-    def study_ai(self, scope, payload):
+    def manage_study_ai_keys(self, action, identity=""):
+        username = self.client.username
+        if not username:
+            return {"ok": False, "error": "Сначала войдите в СДО."}
+        try:
+            with self._study_keys_lock:
+                state = self._study_keys()
+                profiles = state["profiles"]
+                if action == "clear":
+                    profiles.clear()
+                elif action == "select" and identity in profiles:
+                    state["active"] = identity
+                elif action == "remove" and identity in profiles:
+                    del profiles[identity]
+                else:
+                    return {"ok": False, "error": "Подключение уже недоступно."}
+                if state["active"] not in profiles:
+                    state["active"] = next(iter(profiles), "")
+                keyring.set_password(SERVICE + "-study-ai", username, json.dumps(state, ensure_ascii=False))
+            return {"ok": True}
+        except Exception:
+            return {"ok": False, "error": "Не удалось изменить сохранённые подключения."}
+
+    def study_ai(self, scope, payload, cached_only=False):
         kind = "quiz" if isinstance(payload, dict) and "questions" in payload else "question"
-        return self._study_ai.run(self.client.username, kind, scope, payload, self._study_config())
+        return self._study_ai.run(self.client.username, kind, scope, payload, self._study_config(), cached_only)
 
-    def study_pdf_summary(self, scope, url):
-        config = self._study_config()
-        if config.get("mode") == "gemini":
-            field, load = "pdf", self.files.pdf_document
-        else:
-            field, load = "text", self.files.pdf_text
-        answer = self._section_operation(field, load, url)
-        if not answer["ok"]:
-            return answer
-        return self._study_ai.run(self.client.username, "summary", scope, {field: answer["data"]}, config)
+    def study_pdf_topics(self, topics, mode="generate"):
+        from .study_ai import AIError
+        username = self.client.username
+        try:
+            if (not username or mode not in ("cached", "generate")
+                    or not isinstance(topics, list) or not 1 <= len(topics) <= 100):
+                raise AIError("Некорректный список подтем.")
+            if any(not isinstance(topic, dict) or not isinstance(topic.get("url"), str)
+                   or not 1 <= len(topic["url"]) <= 1500 or not isinstance(topic.get("title"), str)
+                   or not isinstance(topic.get("pdfs"), list) or len(topic["pdfs"]) > 20
+                   or (mode != "cached" and not topic["pdfs"])
+                   or any(not isinstance(url, str) or not 1 <= len(url) <= 1500 for url in topic["pdfs"])
+                   for topic in topics):
+                raise AIError("Некорректные ссылки на материалы подтем.")
+
+            def load(url):
+                with self._lock.hold(False):
+                    if self.client.username != username:
+                        raise AIError("Учётная запись изменилась. Откройте материал заново.")
+                    return self.files.pdf_document(url)
+
+            config = self._study_config() if mode != "cached" else {}
+            return {"ok": True, "data": self._study_ai.topic_summaries(username, topics, config, load, mode)}
+        except (AIError, SDOError) as error:
+            return {"ok": False, "error": str(error)}
+        except Exception as error:
+            logger.warning("study_pdf_failed type=%s", type(error).__name__)
+            return {"ok": False, "error": "Не удалось подготовить PDF-конспект."}
+
+    def _summary_pdf_bytes(self, title, url):
+        from .summary_pdf import summary_pdf
+        from .study_ai import AIError
+        result = self.study_pdf_topics([{"url": url, "title": title, "pdfs": []}], "cached")
+        if not result["ok"] or not result["data"]:
+            raise AIError(result.get("error", "Сначала подготовьте конспект."))
+        data = result["data"][0]
+        return summary_pdf(title[:400], data["markdown"], data["warning"])
+
+    def study_summary_page(self, title, url, index):
+        from .documents import render_pdf_page
+        try:
+            pdf = self._summary_pdf_bytes(title, url)
+            with self._lock.hold(False):
+                return {"ok": True, "data": render_pdf_page(pdf, index)}
+        except Exception as error:
+            logger.warning("study_summary_render_failed type=%s", type(error).__name__)
+            return {"ok": False, "error": "Не удалось открыть страницу конспекта."}
+
+    def save_study_summary_pdf(self, title, url):
+        try:
+            import re
+            filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title[:100]).strip(" .") or "Конспект"
+            pdf = self._summary_pdf_bytes(title, url)
+            selected = self.window.create_file_dialog(webview.FileDialog.SAVE, save_filename=f"{filename} — конспект.pdf",
+                                                       file_types=("PDF (*.pdf)",))
+            if selected:
+                path = Path(selected if isinstance(selected, str) else selected[0])
+                path.write_bytes(pdf)
+            return {"ok": True, "saved": bool(selected)}
+        except Exception as error:
+            logger.warning("study_summary_save_failed type=%s", type(error).__name__)
+            return {"ok": False, "error": "Не удалось сохранить PDF-конспект."}
 
     def pdf_page(self, url, index):
         return self._section_operation("pdf", self.files.pdf_page, url, index)

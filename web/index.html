@@ -148,7 +148,10 @@
       <section id="page-reader" class="page reader hidden">
         <div id="reader-layout" class="reader-layout">
           <div class="reader-primary">
-            <button id="reader-back" type="button" class="ghost">← Назад</button>
+            <div class="reader-navigation">
+              <button id="reader-back" type="button" class="ghost">← Назад</button>
+              <button id="reader-quiz-results" type="button" class="ghost hidden">Результаты теста</button>
+            </div>
             <h1 id="reader-title"></h1>
             <p id="reader-status" class="muted" role="status"></p>
             <div id="reader-content" class="resource-content"></div>
@@ -251,11 +254,14 @@
         </label>
       </div><small id="theme-status" role="status"></small></fieldset><label class="setting"><span><strong>Запускать вместе с Windows</strong><small>Открывать приложение при входе в систему</small></span><input id="autostart" type="checkbox"></label><label class="setting"><span><strong>Звуки уведомлений</strong><small>Сообщения и уведомления СДО</small></span><input id="notification-sounds" type="checkbox" checked></label><div class="setting ai-setting"><form id="ai-settings">
           <strong>API для ИИ</strong>
+          <label>Сохранённые подключения <select id="ai-saved-profiles" disabled></select></label>
+          <div><button id="ai-clear" type="button" class="ghost" disabled>Удалить выбранный ключ</button> <button id="ai-clear-all" type="button" class="ghost" disabled>Удалить все ключи</button></div>
           <label>Подключение <select id="ai-provider"><option value="gemini">Gemini · личный ключ</option><option value="relay">Сервер ОСЭК</option></select></label>
+          <label>Название <input id="ai-name" placeholder="Gemini account1" maxlength="60" required></label>
           <label id="ai-url-label">Адрес сервера <input id="ai-url" type="url" placeholder="https://…/study-ai"></label>
-          <label>Ключ или токен <input id="ai-key" type="password" autocomplete="off"></label>
+          <label>Ключ или токен <input id="ai-key" type="password" autocomplete="off" required></label>
           <small>При использовании ИИ текст вопроса или PDF отправляется выбранному сервису.</small>
-          <div><button type="submit" class="primary">Сохранить API</button> <button id="ai-clear" type="button" class="ghost">Удалить ключ</button></div>
+          <div><button type="submit" class="primary">Добавить ключ</button></div>
           <small id="ai-settings-status" role="status"></small>
         </form></div><div class="setting update-setting">
           <div><strong>Обновление приложения</strong><small id="settings-update-status" aria-live="polite">Проверяю наличие обновлений…</small>

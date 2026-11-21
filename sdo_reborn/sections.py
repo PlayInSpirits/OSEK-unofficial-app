@@ -4,6 +4,7 @@ import re
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
@@ -44,6 +45,87 @@ IGNORED_TAGS = {
 MEDIA_HOSTS = {"sdo.i-spo.ru", "media2.sdo.support"}
 SCHEDULE_STYLES = {"backwhite", "backgray"}
 INLINE_IMAGE = re.compile(r"data:image/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\r\n]+")
+
+
+def quiz_history_table(soup):
+    for table in soup.select("#region-main table"):
+        headers = [cell.get_text(" ", strip=True).casefold() for cell in table.select("th")]
+        if ("quizattemptsummary" in table.get("class", [])
+                or ("попытка" in headers and "состояние" in headers
+                    and any(label.startswith(("баллы", "оценка")) for label in headers))):
+            return table
+    return None
+
+
+def quiz_start_details(soup):
+    main = soup.select_one("#region-main")
+    details = []
+    if not main:
+        return details
+    for label in ("Метод оценивания", "Проходная оценка"):
+        text = main.find(string=re.compile(r"^\s*" + label + r"\s*:"))
+        if text is not None:
+            field = text.parent.find_parent(["p", "li"]) or text.parent
+            details.append({"tag": "p", "attrs": {}, "children": [field.get_text(" ", strip=True)]})
+    return details
+
+
+def quiz_result_details(soup, history):
+    text = soup.select_one("#region-main").get_text(" ", strip=True)
+    rows = history.select("tr")
+    headers = [cell.get_text(" ", strip=True).casefold() for cell in rows[0].find_all(["td", "th"], recursive=False)] if rows else []
+    number = r"(\d+(?:[.,]\d+)?)"
+    ratio = rf"{number}\s*(?:/|из)\s*{number}"
+    threshold = re.search(r"Проходная оценка\s*:\s*" + ratio, text, re.I)
+    grade = re.search(r"(?:Высшая оценка|Итоговая оценка|Ваша оценка)\s*:\s*" + ratio, text, re.I)
+    value = lambda raw: Decimal(raw.replace(",", "."))
+    if grade:
+        earned, maximum = map(value, grade.groups())
+    else:
+        column = next((i for i, label in enumerate(headers) if re.match(r"Оценка\s*(?:/|из)", label, re.I)), None)
+        maximum_match = re.search(number, headers[column]) if column is not None else None
+        marks = []
+        if maximum_match:
+            for row in rows[1:]:
+                cells = row.find_all(["td", "th"], recursive=False)
+                if len(cells) > column:
+                    mark = re.fullmatch(number, cells[column].get_text(strip=True))
+                    if mark:
+                        marks.append(value(mark[1]))
+        if not marks or (len(marks) != 1 and not re.search(r"Метод оценивания\s*:\s*Высшая оценка", text, re.I)):
+            return []
+        earned, maximum = max(marks), value(maximum_match[1])
+    fmt = lambda n: f"{n:.2f}".replace(".", ",")
+    facts = [f"Полученная оценка: {fmt(earned)} из {fmt(maximum)}"]
+    if threshold and maximum > 0:
+        required, scale = map(value, threshold.groups())
+        if scale > 0:
+            passed = earned * scale >= required * maximum
+            facts.append("Тест: сдан" if passed else "Тест: не сдан")
+            if not passed:
+                limit = re.search(r"(?:Разрешено попыток|Попыток разрешено|Количество попыток)\s*:\s*(\d+|не ограничено|неограниченно)", text, re.I)
+                state_column = headers.index("состояние") if "состояние" in headers else None
+                completed = 0
+                for row in rows[1:] if state_column is not None else []:
+                    cells = row.find_all(["td", "th"], recursive=False)
+                    if len(cells) > state_column and re.match(r"Заверш", cells[state_column].get_text(strip=True), re.I):
+                        completed += 1
+                if completed:
+                    facts.append(f"Попыток: {completed}" + (f" из {limit[1]}" if limit else " · лимит не указан"))
+    return [{"tag": "p", "attrs": {}, "children": [fact]} for fact in facts]
+
+
+def quiz_review_view_url(url, soup):
+    for link in soup.select("#region-main a[href], #page-navbar a[href], .breadcrumb a[href]"):
+        address = urlparse(urljoin(url, link["href"]))
+        query = parse_qs(address.query)
+        if address.path == "/mod/quiz/view.php" and query.get("id", [""])[0].isdigit():
+            try:
+                return safe_url(urlunparse(address._replace(query=urlencode({"id": query["id"][0]}), fragment="")))
+            except (SDOError, ValueError):
+                continue
+    module_id = parse_qs(urlparse(url).query).get("cmid", [""])[0]
+    return safe_url(f"/mod/quiz/view.php?id={module_id}") if module_id.isdigit() else ""
 
 
 def project_content(node, base):
@@ -220,10 +302,36 @@ class StudentSections:
                     href = safe_url(urlunparse(action._replace(query=urlencode(fields))))
                     blocks.append({"tag": "a", "attrs": {"href": href}, "children": [label]})
         interactive = module in UPLOAD_MODULES | {"quiz", "askquest", "forum"}
+        path = urlparse(url).path
+        quiz_review = path == "/mod/quiz/review.php"
+        review_link = ""
+        history = quiz_history_table(soup) if path == "/mod/quiz/view.php" else None
+        if history is not None:
+            for link in history.select("a[href]"):
+                projected = project_content(link, url)
+                href = projected.get("attrs", {}).get("href", "") if isinstance(projected, dict) else ""
+                if urlparse(href).path == "/mod/quiz/review.php":
+                    review_link = href
+            blocks = quiz_start_details(soup) + quiz_result_details(soup, history)
+        if quiz_review and quiz_history_table(soup) is None:
+            view_url = quiz_review_view_url(url, soup)
+            if view_url:
+                try:
+                    original = self.client._authenticated_response(view_url)
+                    table = quiz_history_table(BeautifulSoup(original.text, "html.parser"))
+                except SDOError:
+                    table = None
+                if table is not None:
+                    blocks.append({"tag": "section", "attrs": {}, "children": [
+                        {"tag": "h2", "attrs": {}, "children": ["История попыток"]},
+                        project_content(table, view_url),
+                    ]})
         return {
             "title": title.get_text(" ", strip=True) if title else "",
             "blocks": blocks, "forms": forms, "url": url,
-            "notice": "СДО не предоставила поддерживаемую форму для этого экрана." if interactive and not forms else "",
+            "quizReviewUrl": review_link,
+            "quizRetry": history is not None,
+            "notice": "СДО не предоставила поддерживаемую форму для этого экрана." if interactive and not forms and not quiz_review and history is None else "",
         }
 
     def submit_activity(self, token, button, values, paths):

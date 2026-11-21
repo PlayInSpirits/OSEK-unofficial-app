@@ -211,8 +211,10 @@ function paintReaderSnapshot(state) {
   showPage('reader');
   $('reader-title').textContent = state.title;
   $('reader-status').textContent = state.status;
+  syncQuizResultsNavigation(state.history.at(-1));
   $('reader-content').replaceChildren(...state.body);
   syncQuestionAIButtons();
+  $('reader-content').querySelector('.study-ai-account select')?.dispatchEvent(new Event('refresh-ai-profiles'));
   syncCourseReference(state.reference);
   document.querySelector('main.content').scrollTop = state.scroll;
 }
@@ -379,35 +381,65 @@ function syncCourseReference(reference) {
   }
 }
 
+const pendingReferenceSections = new Set();
+
+function syncReferenceSection(section) {
+  const pending = pendingReferenceSections.has(section.dataset.summarySection);
+  section.querySelectorAll('button').forEach(button => { button.disabled = pending; });
+  section.setAttribute('aria-busy', String(pending));
+}
+
 function renderReferenceTopics() {
   if (!courseReference) return;
   ++referenceVersion;
   $('course-reference-back').classList.add('hidden');
   const content = $('course-reference-content');
   content.replaceChildren();
-  let heading = '';
+  let section = element('div', 'reference-section');
+  let topics = [];
+  function finishSection() {
+    if (!section.firstChild) return;
+    if (topics.length) {
+      const actions = element('div', 'reference-module-actions');
+      section.querySelector('.reference-topic').before(actions);
+      const sectionKey = JSON.stringify(topics.map(topic => topic.url));
+      const sectionTopics = topics;
+      section.dataset.summarySection = sectionKey;
+      addStudyButton(actions, 'Создать выжимку материалов колледжа в этом разделе', async () => {
+        if (pendingReferenceSections.size) return {ok: false, error: 'Другой раздел уже обрабатывается.'};
+        pendingReferenceSections.add(sectionKey);
+        syncReferenceSection(actions.parentElement);
+        try {
+          return await generateSectionSummaries(sectionTopics);
+        } finally {
+          pendingReferenceSections.delete(sectionKey);
+          content.querySelectorAll('[data-summary-section]').forEach(syncReferenceSection);
+        }
+      }, () => {});
+      syncReferenceSection(section);
+    }
+    content.append(section);
+  }
   for (const item of courseReference.topics) {
     if (item.kind === 'раздел') {
-      heading = item.title;
+      finishSection();
+      section = element('div', 'reference-section');
+      section.append(element('h3', 'topic-section-title', item.title));
+      topics = [];
       continue;
     }
     if (!item.url || isCourseActivity(item) || ['forum', 'askquest'].includes(item.kind)) continue;
-    if (heading) {
-      content.append(element('h3', 'topic-section-title', heading));
-      heading = '';
-    }
-    const link = internalLink(item.title, () => openReferenceMaterial(item.url, item.title));
+    const link = element('button', 'internal-link reference-topic-link', item.title);
+    link.type = 'button';
+    link.onclick = () => openReferenceMaterial(item.url, item.title);
     const row = element('div', 'reference-topic');
     row.append(link);
-    const path = new URL(item.url).pathname;
-    if (materialSection(item.url) === 'pdf' || /^\/mod\/(?:gbooks|nwresource|resource|book|page)\//.test(path)) {
-      const button = element('button', 'ghost study-ai-button', 'Краткая выжимка от ИИ');
-      button.type = 'button';
-      button.onclick = () => openReferenceMaterial(item.url, item.title, 0, true);
-      row.append(button);
+    if (!topics.some(topic => topic.url === item.url)) {
+      topics.push({url: item.url, title: item.title, pdfs: []});
     }
-    content.append(row);
+    section.append(row);
   }
+  finishSection();
   if (!content.firstChild) empty(content, 'СДО не вернула материалы этого предмета.');
   $('course-reference').scrollTop = 0;
 }
@@ -424,7 +456,103 @@ function referencePdfLinks(blocks) {
   return [...links];
 }
 
-async function openReferenceMaterial(url, title, pdfIndex = 0, summarize = false) {
+async function generateSectionSummaries(topics) {
+  const api = window.pywebview.api;
+  const cached = await api.study_pdf_topics(topics, 'cached');
+  if (!cached.ok) return cached;
+  const saved = new Set(cached.data.filter(item => item.markdown).map(item => item.index));
+  const missing = [];
+  for (const [index, topic] of topics.entries()) {
+    if (saved.has(index)) continue;
+    const resolved = await resolveTopicPdfs(topic).catch(() => null);
+    if (resolved?.pdfs.length) missing.push(resolved);
+  }
+  if (!missing.length && !saved.size) return {ok: false, error: 'В этом разделе не найдено доступных PDF.'};
+  const generated = missing.length ? await api.study_pdf_topics(missing, 'generate') : {ok: true, data: []};
+  if (!generated.ok) return generated;
+  const count = saved.size + generated.data.filter(item => item.markdown).length;
+  const warning = generated.data.map(item => item.warning).filter(Boolean).join(' ');
+  const notice = [`PDF-конспекты доступны: ${count} из ${topics.length}.`, warning].filter(Boolean).join(' ');
+  return {ok: count > 0, error: warning || 'Gemini не смог прочитать PDF.', notice};
+}
+
+async function resolveTopicPdfs(topic) {
+  if (topic.pdfs.length) return topic;
+  if (materialSection(topic.url) === 'pdf') return {...topic, pdfs: [topic.url]};
+  const result = await window.pywebview.api.student_section('material', '', topic.url);
+  if (!result.ok) throw Error(result.error);
+  return {...topic, pdfs: referencePdfLinks(result.data.blocks || [])};
+}
+
+function mountTopicSummary(content, topic) {
+  const api = window.pywebview.api;
+  const actions = element('div', 'pdf-toolbar');
+  const save = element('button', 'ghost', 'Скачать PDF');
+  save.type = 'button';
+  actions.append(save);
+  const status = element('p', 'muted study-ai-status');
+  status.setAttribute('role', 'status');
+  const preview = element('div', 'study-summary');
+  content.append(actions, status, preview);
+  content.append(internalLink('Открыть материал колледжа', () => openReferenceMaterial(topic.url, topic.title)));
+  streamReferencePdf(preview, index => api.study_summary_page(topic.title, topic.url, index),
+    error => { status.textContent = error; });
+  save.onclick = async () => {
+    const result = await api.save_study_summary_pdf(topic.title, topic.url);
+    if (!result.ok) status.textContent = result.error;
+    else if (result.saved) status.textContent = 'PDF-конспект сохранён.';
+  };
+}
+
+function streamReferencePdf(target, fetchPage, showError) {
+  const sentinel = element('div', 'summary-page-sentinel');
+  target.replaceChildren(sentinel);
+  let index = 0;
+  let loading = false;
+  const observer = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting)) loadPage();
+  }, {root: $('course-reference'), rootMargin: '0px 0px 300px'});
+  async function loadPage() {
+    if (loading) return;
+    observer.unobserve(sentinel);
+    if (!sentinel.isConnected) return;
+    loading = true;
+    try {
+      const result = await fetchPage(index);
+      if (!sentinel.isConnected) return;
+      if (!result.ok) throw Error(result.error);
+      const page = element('img', 'pdf-page');
+      page.alt = `Страница ${index + 1}`;
+      page.src = result.data.image;
+      await page.decode();
+      if (!sentinel.isConnected) return;
+      sentinel.before(page);
+      index += 1;
+      if (index < result.data.total) observer.observe(sentinel);
+      else sentinel.remove();
+    } catch (error) {
+      if (!sentinel.isConnected) return;
+      showError(error.message);
+      sentinel.remove();
+    } finally {
+      loading = false;
+    }
+  }
+  loadPage();
+}
+
+function withoutReferencePdfLinks(blocks, links) {
+  return blocks.flatMap(node => {
+    if (!node || typeof node !== 'object') return [node];
+    if (node.tag === 'a' && links.has(node.attrs?.href)) return [];
+    if (!node.children?.length) return [node];
+    const children = withoutReferencePdfLinks(node.children, links);
+    return children.some(child => typeof child !== 'string' || child.trim())
+      ? [{...node, children}] : [];
+  });
+}
+
+async function openReferenceMaterial(url, title) {
   if (!courseReference) return;
   const version = ++referenceVersion;
   const content = $('course-reference-content');
@@ -436,32 +564,38 @@ async function openReferenceMaterial(url, title, pdfIndex = 0, summarize = false
       throw Error('Откройте учебный материал этого предмета из списка тем.');
     }
     const api = window.pywebview.api;
-    const result = section !== 'pdf' ? await api.student_section('material', '', url)
-      : summarize ? {ok: true, data: {}} : await api.pdf_page(url, pdfIndex);
+    const result = section === 'pdf' ? {ok: true, data: {}} : await api.student_section('material', '', url);
     if (version !== referenceVersion) return;
     if (!result.ok) throw Error(result.error);
     content.replaceChildren(element('h3', '', result.data.title || title || 'Учебный материал'));
     const blocks = result.data.blocks || [];
-    const pdfLinks = summarize ? (section === 'pdf' ? [url] : referencePdfLinks(blocks)) : [];
-    if (section === 'pdf' && !summarize) {
-      const summary = element('div', 'study-summary');
-      addStudyButton(content, 'Краткая выжимка от ИИ', () => api.study_pdf_summary(url, url),
-        text => { summary.textContent = text; });
-      content.append(summary);
-      appendPdf(content, result.data, pdfIndex, index => openReferenceMaterial(url, title, index));
-    } else if (summarize) {
-      if (!pdfLinks.length) content.append(element('p', 'muted', 'СДО не предоставила PDF для этой темы.'));
-      for (const [index, pdfUrl] of pdfLinks.entries()) {
-        const summary = element('div', 'study-summary');
-        const button = addStudyButton(content, pdfLinks.length > 1 ? `Краткая выжимка из PDF ${index + 1}` : 'Краткая выжимка от ИИ',
-          () => api.study_pdf_summary(pdfUrl, pdfUrl), text => { summary.textContent = text; });
-        content.append(summary);
-        if (pdfLinks.length === 1) button.click();
+    const pdfLinks = section === 'pdf' ? [url] : referencePdfLinks(blocks);
+    const topic = {url, title: result.data.title || title || 'Учебный материал', pdfs: []};
+    const openSummary = element('button', 'ghost study-ai-button', 'Открыть выжимку материала колледжа');
+    openSummary.type = 'button';
+    openSummary.disabled = true;
+    content.append(openSummary);
+    api.study_pdf_topics([topic], 'cached').then(cached => {
+      if (version !== referenceVersion || !cached.ok || !cached.data[0]?.markdown) return;
+      openSummary.disabled = false;
+      openSummary.onclick = () => {
+        ++referenceVersion;
+        content.replaceChildren(element('h3', '', topic.title));
+        mountTopicSummary(content, topic);
+        $('course-reference').scrollTop = 0;
+      };
+    }).catch(() => {});
+    const material = withoutReferencePdfLinks(blocks, new Set(pdfLinks));
+    appendBlocks(content, material, openReferenceMaterial);
+    if (!material.length && pdfLinks.length) {
+      for (const pdfUrl of pdfLinks) {
+        const preview = element('div', 'study-summary');
+        const status = element('p', 'muted study-ai-status');
+        content.append(status, preview);
+        streamReferencePdf(preview, index => api.pdf_page(pdfUrl, index), error => { status.textContent = error; });
       }
-      content.append(internalLink('Открыть материал', () => openReferenceMaterial(url, title)));
-    } else {
-      appendBlocks(content, blocks, openReferenceMaterial);
-      if (!blocks.length) content.append(element('p', 'muted', 'СДО не вернула содержимое темы.'));
+    } else if (!material.length) {
+      content.append(element('p', 'muted', 'СДО не вернула содержимое темы.'));
     }
     $('course-reference').scrollTop = 0;
   } catch (error) {
@@ -495,6 +629,7 @@ async function renderReader() {
   const version = ++readerVersion;
   showPage('reader');
   syncCourseReference(reading.reference);
+  syncQuizResultsNavigation(null);
   const content = $('reader-content');
   content.replaceChildren();
   $('reader-title').textContent = reading.title;
@@ -521,6 +656,8 @@ function paintReader(data, reading) {
   $('reader-status').textContent = data.notice || '';
   if (data.title) $('reader-title').textContent = data.title;
   if (data.url) reading.url = data.url;
+  reading.quizReviewUrl = data.quizReviewUrl;
+  syncQuizResultsNavigation(reading);
   const path = reading.section === 'material' ? new URL(reading.url).pathname : '';
   if (['/mod/quiz/attempt.php', '/mod/quiz/summary.php'].includes(path)) quizSession = reading;
   else if (quizSession === reading || path === '/mod/quiz/review.php') quizSession = null;
@@ -531,7 +668,16 @@ function paintReader(data, reading) {
     renderItems(list, data.events, 'event');
     content.append(list);
   } else {
-    appendBlocks(content, data.blocks);
+    if (data.quizRetry && data.blocks.length) {
+      const rules = element('section', 'panel resource-block quiz-start-rules');
+      for (const block of data.blocks) rules.append(renderSourceNode(block));
+      content.append(rules);
+    } else {
+      appendBlocks(content, data.blocks);
+    }
+    if (['/mod/quiz/view.php', '/mod/quiz/review.php', '/mod/quiz/summary.php'].includes(path)) {
+      decorateQuizResults(content);
+    }
     if (typeof data.subscription === 'boolean') {
       const panel = element('div', 'panel resource-block');
       const button = element('button', 'primary', data.subscription ? 'Отписаться' : 'Подписаться');
@@ -555,8 +701,51 @@ function paintReader(data, reading) {
       panel.append(button, status);
       content.append(panel);
     }
-    for (const form of data.forms || []) content.append(renderActivityForm(form, reading));
+    for (const form of data.forms || []) {
+      const retry = data.quizRetry && form.buttons.length === 1 && /пройти|повтор|новая попытка/i.test(form.buttons[0]);
+      content.append(renderActivityForm(retry ? {...form, buttons: ['Пройти тест заново']} : form, reading));
+    }
     if (!data.blocks.length && !data.forms?.length) empty(content, 'СДО не вернула подробности.');
+  }
+}
+
+function syncQuizResultsNavigation(reading) {
+  const button = $('reader-quiz-results');
+  button.classList.toggle('hidden', !reading?.quizReviewUrl);
+  button.onclick = reading?.quizReviewUrl ? () => openMaterial(reading.quizReviewUrl, '', reading.reference) : null;
+}
+
+function decorateQuizResults(content) {
+  for (const table of content.querySelectorAll('table')) {
+    const panel = table.closest('.resource-block');
+    if (!panel) continue;
+    panel.classList.add('quiz-results-panel');
+    const columns = table.rows[0]?.cells.length || 0;
+    table.classList.add(columns > 2 ? 'quiz-results-grid' : 'quiz-results-overview');
+    if (columns > 2) {
+      const headers = Array.from(table.rows[0].cells).map(cell => cell.textContent.trim());
+      const stateColumn = headers.indexOf('Состояние');
+      if (stateColumn >= 0) {
+        const reviewColumn = headers.indexOf('Просмотр');
+        table.classList.add('quiz-attempt-history');
+        for (const row of Array.from(table.rows).slice(1)) {
+          const cell = row.cells[stateColumn];
+          Array.from(row.cells).forEach((entry, index) => { entry.dataset.label = headers[index] || ''; });
+          if (!cell || cell.querySelector('a')) continue;
+          const status = cell.textContent.trim().match(/^Завершен(?:ы|о)?\s*(.*)$/s);
+          if (!status) continue;
+          cell.replaceChildren(element('span', 'quiz-attempt-status', 'Завершен'));
+          if (status[1]) cell.append(element('small', 'quiz-attempt-detail', status[1].trim()));
+        }
+        if (reviewColumn >= 0) Array.from(table.rows).forEach(row => row.cells[reviewColumn]?.remove());
+      }
+    }
+    const region = element('div', 'quiz-results-scroll');
+    region.tabIndex = 0;
+    region.setAttribute('role', 'region');
+    region.setAttribute('aria-label', columns > 2 ? 'Таблица попыток' : 'Итоги теста');
+    table.before(region);
+    region.append(table);
   }
 }
 
@@ -646,7 +835,7 @@ function addStudyButton(parent, title, request, apply, isQuestion = false) {
       const result = await request();
       if (!result.ok) throw Error(result.error);
       apply(result.data);
-      status.textContent = result.cached ? 'Сохранённая рекомендация ИИ' : 'Рекомендация ИИ';
+      status.textContent = result.notice || (result.cached ? 'Сохранённая рекомендация ИИ' : 'Рекомендация ИИ');
     } catch (error) {
       status.textContent = error.message;
     } finally {
@@ -770,12 +959,58 @@ function renderActivityForm(data, reading) {
       id, question, multiple: choices.every(choice => choice.kind === 'checkbox'),
       options: choices.map(({text}, optionId) => ({id: optionId, text})),
     }));
-    addStudyButton(tools, 'Режим ИИ', () => window.pywebview.api.study_ai('quiz:' + quizId, {questions}), answers => {
+    const moduleId = url.searchParams.get('cmid') || url.searchParams.get('id');
+    const legacyScope = moduleId ? 'module:' + url.pathname.split('/')[2] + ':' + moduleId
+      : url.pathname + ':' + (url.searchParams.get('attempt') || '');
+    let keyChange = Promise.resolve();
+    const getAnswers = async (cachedOnly = false) => {
+      if (!cachedOnly) await keyChange;
+      return window.pywebview.api.study_ai('quiz:' + quizId, {questions, legacyScope}, cachedOnly);
+    };
+    const applyAnswers = answers => {
       for (const {questionId, optionIds} of answers) {
         quizQuestions[questionId].choices.forEach(({control}, id) =>
           control.classList.toggle('study-ai-suggested', optionIds.includes(id)));
       }
-    }, true);
+    };
+    addStudyButton(tools, 'Режим ИИ', () => getAnswers(), applyAnswers, true);
+    const account = element('label', 'study-ai-account hidden', 'Ключ ИИ ');
+    const select = element('select');
+    account.append(select);
+    const accountStatus = element('small', 'muted');
+    accountStatus.setAttribute('role', 'status');
+    tools.prepend(account, accountStatus);
+    const refreshAccounts = async () => {
+      const state = await window.pywebview.api.study_ai_settings();
+      const profiles = state.profiles.filter(profile => profile.mode === 'gemini');
+      paintAIProfiles(select, profiles, state.active);
+      account.classList.toggle('hidden', !profiles.length);
+    };
+    select.onchange = () => {
+      keyChange = changeAccount();
+    };
+    const changeAccount = async () => {
+      select.disabled = true;
+      try {
+        const result = await window.pywebview.api.manage_study_ai_keys('select', select.value);
+        if (!result.ok) throw Error(result.error);
+        accountStatus.textContent = 'Ключ переключён.';
+      } catch (error) {
+        accountStatus.textContent = error.message;
+      } finally {
+        await refreshAccounts().catch(() => { select.disabled = false; });
+      }
+    };
+    select.addEventListener('refresh-ai-profiles', () => refreshAccounts().catch(() => {}));
+    refreshAccounts().catch(() => {});
+    getAnswers(true).then(result => {
+      if (!result.ok || !result.data.length) return;
+      const status = tools.querySelector('.study-ai-status');
+      if (status.textContent) return;
+      applyAnswers(result.data);
+      const count = result.data.filter(answer => answer.optionIds.length).length;
+      if (count) status.textContent = `Сохранённые рекомендации: ${count} из ${questions.length}.`;
+    }).catch(() => {});
   }
   for (const [index, text] of data.buttons.entries()) {
     const button = element('button', 'primary', text);
@@ -1665,22 +1900,56 @@ function syncAISettings() {
 }
 async function loadAISettings() {
   const config = await window.pywebview.api.study_ai_settings();
-  $('ai-provider').value = config.mode;
-  $('ai-url').value = config.url;
-  $('ai-key').value = '';
-  $('ai-key').placeholder = config.hasKey ? 'Ключ сохранён' : 'Введите ключ';
+  paintAIProfiles($('ai-saved-profiles'), config.profiles, config.active);
+  $('ai-clear').disabled = !config.active;
+  $('ai-clear-all').disabled = !config.profiles.length;
   syncAISettings();
 }
-async function saveAISettings(clear) {
-  const result = await window.pywebview.api.save_study_ai_settings(
-    $('ai-provider').value, $('ai-url').value, clear ? '' : $('ai-key').value, clear);
-  $('ai-key').value = '';
-  $('ai-settings-status').textContent = result.ok ? (clear ? 'Ключ удалён.' : 'Настройки сохранены.') : result.error;
-  if (result.ok) await loadAISettings();
+function paintAIProfiles(select, profiles, active) {
+  const placeholder = element('option', '', profiles.length ? 'Выберите подключение' : 'Нет сохранённых ключей');
+  placeholder.value = '';
+  placeholder.disabled = true;
+  select.replaceChildren(placeholder, ...profiles.map(profile => {
+    const option = element('option', '', profile.name);
+    option.value = profile.id;
+    return option;
+  }));
+  select.value = profiles.some(profile => profile.id === active) ? active : '';
+  select.disabled = !profiles.length;
 }
+async function changeAISettings(operation, success) {
+  const status = $('ai-settings-status');
+  try {
+    const result = await operation();
+    if (!result.ok) throw Error(result.error);
+    status.textContent = success;
+    await loadAISettings();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+const manageAIProfiles = (action, success) => changeAISettings(() =>
+  window.pywebview.api.manage_study_ai_keys(action, $('ai-saved-profiles').value), success);
 $('ai-provider').addEventListener('change', syncAISettings);
-$('ai-settings').addEventListener('submit', event => { event.preventDefault(); saveAISettings(false); });
-$('ai-clear').addEventListener('click', () => saveAISettings(true));
+$('ai-saved-profiles').addEventListener('change', () => manageAIProfiles('select', 'Ключ переключён.'));
+$('ai-settings').addEventListener('submit', event => {
+  event.preventDefault();
+  changeAISettings(async () => {
+    const result = await window.pywebview.api.save_study_ai_settings(
+      $('ai-provider').value, $('ai-url').value, $('ai-key').value, $('ai-name').value);
+    if (result.ok) {
+      $('ai-key').value = '';
+      $('ai-name').value = '';
+    }
+    return result;
+  }, 'Ключ добавлен.');
+});
+$('ai-clear').addEventListener('click', () => manageAIProfiles('remove', 'Ключ удалён.'));
+$('ai-clear-all').addEventListener('click', () => {
+  if (window.confirm('Удалить все сохранённые API-ключи для этой учётной записи?')) {
+    manageAIProfiles('clear', 'Все ключи удалены.');
+  }
+});
 
 function applyAppearance(theme) {
   const safe = ['night', 'cobalt', 'cream', 'pine', 'plum'].includes(theme) ? theme : 'night';
