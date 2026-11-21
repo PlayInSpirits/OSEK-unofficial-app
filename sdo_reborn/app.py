@@ -34,8 +34,17 @@ APPEARANCES = {"night", "cobalt", "cream", "pine", "plum"}
 
 
 def resource_path(name: str) -> Path:
+    if getattr(sys, "frozen", None) == "windows_exe":
+        return Path(sys.executable).parent / name
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
     return root / name
+
+
+def application_executable() -> Path:
+    executable = Path(sys.executable)
+    if getattr(sys, "frozen", None) == "windows_exe" and executable.parent.name == "_internal":
+        return executable.parent.parent / "ОСЭК-Remastered.exe"
+    return executable
 
 
 def icon_image() -> Image.Image:
@@ -234,7 +243,7 @@ class Bridge:
 
         def install():
             try:
-                stage_update(release, Path(sys.executable), resource_path("sdo_reborn/install_update.ps1"), on_progress)
+                stage_update(release, application_executable(), resource_path("sdo_reborn/install_update.ps1"), on_progress)
             except Exception as error:
                 logger.warning("update_install_failed type=%s", type(error).__name__)
                 message = str(error) if isinstance(error, UpdateError) else "Не удалось скачать или распаковать обновление. Проверьте подключение и права записи в папку приложения."
@@ -717,7 +726,7 @@ class Bridge:
         try:
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
                 if enabled:
-                    command = f'"{sys.executable}"'
+                    command = f'"{application_executable()}"'
                     if not getattr(sys, "frozen", False):
                         command += ' -m sdo_reborn'
                     winreg.SetValueEx(key, "ОСЭК-Remastered", 0, winreg.REG_SZ, command)
@@ -863,7 +872,7 @@ def main():
     window.events.closing += bridge._closing
     window.events.maximized += bridge._window_maximized
     window.events.restored += bridge._window_restored
-    window.events.loaded += lambda: acknowledge_restart(Path(sys.executable))
+    window.events.loaded += lambda: acknowledge_restart(application_executable())
 
     def startup():
         bridge._start_tray()

@@ -145,7 +145,7 @@ def start_installer(executable: Path, script: Path, stage: Path):
     UPDATE_FAILURE.unlink(missing_ok=True)
     env = os.environ.copy()
     env.update({
-        "OSEK_UPDATE_PID": str(os.getpid()), "OSEK_UPDATE_EXE": str(executable),
+        "OSEK_UPDATE_PID": os.environ.get("OSEK_LAUNCHER_PID") or str(os.getpid()), "OSEK_UPDATE_EXE": str(executable),
         "OSEK_UPDATE_STAGE": str(stage), "OSEK_UPDATE_ERROR": str(UPDATE_FAILURE),
         "PYINSTALLER_RESET_ENVIRONMENT": "1",
     })

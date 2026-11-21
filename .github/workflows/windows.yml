@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt py2exe==0.14.2.0 pywin32==312
       - name: Run parser tests
         run: python -m unittest discover -s tests -v
       - name: Build executable
@@ -29,9 +29,15 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "OSEK-v0.$version") {
             throw 'Release tag must match web/version.txt'
           }
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx --name ОСЭК-Remastered --icon assets/icon.ico --add-data "web:web" --add-data "assets/icon.png:assets" --add-data "sdo_reborn/install_update.ps1:sdo_reborn" --collect-all webview --collect-all pypdfium2 --collect-all pypdfium2_raw --hidden-import clr --hidden-import webview.platforms.edgechromium run.py
+          python tools/build_py2exe.py 'dist/ОСЭК-Remastered'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path -LiteralPath 'dist/ОСЭК-Remastered/ОСЭК-Remastered.exe')) { throw 'Executable missing' }
+          $check = Start-Process -FilePath 'dist/ОСЭК-Remastered/ОСЭК-Remastered.exe' -ArgumentList '--packaging-check' -PassThru -WindowStyle Hidden
+          if (!$check.WaitForExit(30000)) { throw 'Packaged application self-test timed out' }
+          if ($check.ExitCode -ne 0) {
+            Get-Content -LiteralPath 'dist/ОСЭК-Remastered/_internal/packaging-check.log' -ErrorAction SilentlyContinue
+            throw "Packaged application self-test failed: $($check.ExitCode)"
+          }
           Compress-Archive -Path 'dist/ОСЭК-Remastered' -DestinationPath "dist/OSEK-Remastered-v0.$version.zip" -Force
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
